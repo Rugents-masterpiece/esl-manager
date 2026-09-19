@@ -9,6 +9,7 @@ import sqlite3
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 from .storage import Storage
 from .vendor import live_writes_authorized
@@ -254,7 +255,18 @@ class Service:
         values = (f"%{search.lower()}%",) if search is not None else ()
         with self.storage.connection() as connection:
             rows = connection.execute("SELECT * FROM templates" + clause + " ORDER BY name, id", values).fetchall()
-        return [dict(row) for row in rows]
+        results = []
+        for row in rows:
+            item = dict(row)
+            try:
+                fields = json.loads(item.get("style_fields") or "[]")
+            except json.JSONDecodeError as error:
+                raise IntegrationError("Stored template fields are invalid") from error
+            if not isinstance(fields, list) or any(not isinstance(field, str) for field in fields):
+                raise IntegrationError("Stored template fields are invalid")
+            item["style_fields"] = fields
+            results.append(item)
+        return results
 
     def bind_tag(self, product_id: str, tag_id: str) -> dict[str, str]:
         product_id = _identifier(product_id, "product_id")
@@ -509,6 +521,72 @@ class Service:
         except ValidationError as error:
             raise IntegrationError(f"Invalid vendor field: {field}") from error
 
+    @staticmethod
+    def _vendor_text(value: Any, field: str, *, required: bool = True) -> str | None:
+        try:
+            return _text(value, field, required=required)
+        except ValidationError as error:
+            raise IntegrationError(f"Invalid vendor field: {field}") from error
+
+    @staticmethod
+    def _optional_vendor_integer(value: Any, field: str, *, minimum: int | None = None,
+                                 maximum: int | None = None) -> int | None:
+        if value is None:
+            return None
+        return Service._vendor_integer_value(value, field, minimum=minimum, maximum=maximum)
+
+    def _normalize_vendor_style(self, item: Any, *, detail: bool = False) -> dict[str, Any]:
+        if not isinstance(item, dict):
+            raise IntegrationError("Invalid vendor style response")
+        style_id = self._vendor_id(item.get("id"), "id")
+        fields_value = item.get("styleFileds", [])
+        if (not isinstance(fields_value, list) or len(fields_value) > 100
+                or any(not isinstance(field, str) or not field.strip() or len(field.strip()) > 100
+                       or any(ord(character) < 32 for character in field)
+                       for field in fields_value)):
+            raise IntegrationError("Invalid vendor field: styleFileds")
+        result = {
+            "id": style_id,
+            "name": self._vendor_text(item.get("name") or item.get("descriptor"), "name"),
+            "descriptor": self._vendor_text(item.get("descriptor"), "descriptor", required=False),
+            "width": self._vendor_integer(item, "width", minimum=1),
+            "height": self._vendor_integer(item, "height", minimum=1),
+            "mapping_type": self._vendor_integer_value(
+                item.get("mappingtype", 0), "mappingtype", minimum=0
+            ),
+            "screen_type": self._optional_vendor_integer(item.get("type"), "type", minimum=0),
+            "background_id": self._optional_vendor_integer(
+                item.get("backgroundId", item.get("backgroundID")), "backgroundId", minimum=0
+            ),
+            "vendor_updated_at": self._vendor_text(
+                item.get("updatetime", item.get("updateTime")), "updateTime", required=False
+            ),
+            "style_fields": [field.strip() for field in fields_value],
+            "rotate": self._optional_vendor_integer(item.get("rotate"), "rotate"),
+            "user_id": self._optional_vendor_integer(item.get("userid"), "userid", minimum=0),
+            "preview_url": f"/api/vendor/templates/{style_id}/preview",
+        }
+        if not detail:
+            result.pop("rotate")
+            result.pop("user_id")
+        return result
+
+    def _normalize_vendor_photo(self, item: Any) -> dict[str, Any]:
+        if not isinstance(item, dict):
+            raise IntegrationError("Invalid vendor photo response")
+        photo_id = self._vendor_id(item.get("id"), "id")
+        name = self._vendor_text(item.get("name"), "name")
+        assert name is not None
+        if any(character in "/\\?#" or ord(character) < 32 for character in name):
+            raise IntegrationError("Invalid vendor field: name")
+        return {
+            "id": photo_id,
+            "name": name,
+            "width": self._vendor_integer(item, "width", minimum=1),
+            "height": self._vendor_integer(item, "height", minimum=1),
+            "data_url": f"/api/vendor/photos/{quote(name, safe='')}/data",
+        }
+
     def upsert_vendor_router(self, connection: sqlite3.Connection, item: dict[str, Any]) -> None:
         router_value = item.get("routerID")
         if router_value is None:
@@ -540,7 +618,7 @@ class Service:
 
     def upsert_vendor_template(self, connection: sqlite3.Connection, item: dict[str, Any]) -> None:
         template_id = self._vendor_id(item.get("id"), "id")
-        name = _text(item.get("name") or item.get("descriptor"), "name")
+        name = self._vendor_text(item.get("name") or item.get("descriptor"), "name")
         occupied_names = {
             row["name"] for row in connection.execute(
                 "SELECT name FROM templates WHERE id <> ?", (template_id,)
@@ -560,6 +638,12 @@ class Service:
             if dimensions is None:
                 raise IntegrationError("Invalid vendor field: styleLen")
             width, height = dimensions.groups()
+        style_fields = item.get("styleFileds", [])
+        if (not isinstance(style_fields, list) or len(style_fields) > 100
+                or any(not isinstance(field, str) or not field.strip() or len(field.strip()) > 100
+                       or any(ord(character) < 32 for character in field)
+                       for field in style_fields)):
+            raise IntegrationError("Invalid vendor field: styleFileds")
         self.storage.upsert_template(connection, {
             "id": template_id,
             "name": name,
@@ -568,12 +652,23 @@ class Service:
             "mapping_type": self._vendor_integer_value(
                 item.get("mappingtype", 0), "mappingtype", minimum=0
             ),
+            "descriptor": self._vendor_text(item.get("descriptor"), "descriptor", required=False),
+            "screen_type": self._optional_vendor_integer(item.get("type"), "type", minimum=0),
+            "background_id": self._optional_vendor_integer(
+                item.get("backgroundId", item.get("backgroundID")), "backgroundId", minimum=0
+            ),
+            "vendor_updated_at": self._vendor_text(
+                item.get("updatetime", item.get("updateTime")), "updateTime", required=False
+            ),
+            "style_fields": [field.strip() for field in style_fields],
+            "rotate": self._optional_vendor_integer(item.get("rotate"), "rotate"),
+            "user_id": self._optional_vendor_integer(item.get("userid"), "userid", minimum=0),
         })
 
     def upsert_vendor_tag(self, connection: sqlite3.Connection, item: dict[str, Any],
                           router_ids: set[str], template_ids: set[str],
                           template_names: dict[str, str]) -> None:
-        mac = _text(item.get("mac"), "mac")
+        mac = self._vendor_text(item.get("mac"), "mac")
         tag_id = self._vendor_id(mac, "mac")
         router_value = item.get("routerid")
         if router_value is None:
@@ -600,7 +695,7 @@ class Service:
             raise IntegrationError(f"Invalid vendor field: {status_field}")
         status_value = statuses[status_number]
         label_value = item.get("showStyle") or item.get("name") or item.get("styleName")
-        label = _text(label_value, "showStyle", required=False) if label_value else None
+        label = self._vendor_text(label_value, "showStyle", required=False) if label_value else None
         self.storage.upsert_tag(connection, {
             "id": tag_id,
             "mac": mac,
@@ -613,7 +708,92 @@ class Service:
             "router_id": router_id,
             "template_id": template_id,
             "last_seen_at": _now(),
+            "show_style": self._vendor_text(
+                item.get("showStyle"), "showStyle", required=False
+            ),
+            "vendor_tag_id": self._optional_vendor_integer(item.get("ido"), "ido", minimum=0),
+            "router_status": self._optional_vendor_integer(
+                item.get("routerStatus"), "routerStatus"
+            ),
+            "sub": self._optional_vendor_integer(item.get("sub"), "sub"),
         })
+
+    @staticmethod
+    def _index_vendor_items(items: list[dict[str, Any]], field: str,
+                            resource: str) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for item in items:
+            if not isinstance(item, dict) or item.get(field) is None:
+                raise IntegrationError(f"Invalid vendor {resource} response")
+            key = str(item[field])
+            if not key or key in result:
+                raise IntegrationError(f"Invalid vendor {resource} response")
+            result[key] = item
+        return result
+
+    def vendor_style_catalog(self, client: Any) -> list[dict[str, Any]]:
+        try:
+            items = client.get_style_catalog()
+        except Exception as error:
+            raise IntegrationError("Vendor style catalog failed") from error
+        if not isinstance(items, list):
+            raise IntegrationError("Vendor style catalog returned invalid data")
+        return [self._normalize_vendor_style(item) for item in items]
+
+    def vendor_style_detail(self, client: Any, style_id: int) -> dict[str, Any]:
+        try:
+            item = client.get_style_detail(style_id)
+        except Exception as error:
+            raise IntegrationError("Vendor style detail failed") from error
+        normalized = self._normalize_vendor_style(item, detail=True)
+        if normalized["id"] != str(style_id):
+            raise IntegrationError("Vendor style detail returned a mismatched id")
+        with self.storage.connection() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM templates WHERE id = ?", (str(style_id),)
+            ).fetchone()
+            if exists is not None:
+                self.upsert_vendor_template(connection, item)
+        return normalized
+
+    def vendor_photos(self, client: Any) -> list[dict[str, Any]]:
+        try:
+            items = client.get_photos()
+        except Exception as error:
+            raise IntegrationError("Vendor photo catalog failed") from error
+        if not isinstance(items, list):
+            raise IntegrationError("Vendor photo catalog returned invalid data")
+        photos = [self._normalize_vendor_photo(item) for item in items]
+        self._index_vendor_items(photos, "id", "photo catalog")
+        if len({photo["name"] for photo in photos}) != len(photos):
+            raise IntegrationError("Invalid vendor photo catalog response")
+        with self.storage.connection() as connection:
+            self.storage.replace_vendor_photos(connection, photos, _now())
+        return photos
+
+    @staticmethod
+    def vendor_photo_data(client: Any, photo_name: str) -> tuple[bytes, str]:
+        try:
+            result = client.get_photo_data(photo_name)
+        except Exception as error:
+            raise IntegrationError("Vendor photo data failed") from error
+        if (not isinstance(result, tuple) or len(result) != 2
+                or not isinstance(result[0], bytes) or not result[0]
+                or not isinstance(result[1], str) or not result[1].startswith("image/")):
+            raise IntegrationError("Vendor photo data returned invalid data")
+        return result
+
+    @staticmethod
+    def vendor_template_preview(client: Any, style_id: int) -> tuple[bytes, str]:
+        try:
+            result = client.get_template_preview(style_id)
+        except Exception as error:
+            raise IntegrationError("Vendor template preview failed") from error
+        if (not isinstance(result, tuple) or len(result) != 2
+                or not isinstance(result[0], bytes) or not result[0]
+                or not isinstance(result[1], str) or not result[1].startswith("image/")):
+            raise IntegrationError("Vendor template preview returned invalid data")
+        return result
 
     def sync_read_only(self, client: Any) -> dict[str, dict[str, int]]:
         """Fetch approved read-only collections and atomically upsert local inventory."""
@@ -621,10 +801,78 @@ class Service:
             routers = client.get_routers()
             templates = client.get_templates()
             tags = client.get_tags()
+            style_catalog = client.get_style_catalog()
+            extended_tags = client.get_extended_tags()
         except Exception as error:
             raise IntegrationError("Vendor read-only sync failed") from error
-        if any(not isinstance(collection, list) for collection in (routers, templates, tags)):
+        if any(not isinstance(collection, list) for collection in (
+            routers, templates, tags, style_catalog, extended_tags
+        )):
             raise IntegrationError("Vendor read-only sync returned invalid data")
+        catalog_by_id = self._index_vendor_items(style_catalog, "id", "style catalog")
+        templates_by_id = self._index_vendor_items(templates, "id", "templates")
+        extended_by_mac = self._index_vendor_items(extended_tags, "mac", "extended tags")
+        tags_by_mac = self._index_vendor_items(tags, "mac", "tags")
+
+        if not set(templates_by_id).issubset(catalog_by_id):
+            raise IntegrationError("Vendor style catalog is missing synchronized templates")
+        if set(tags_by_mac) != set(extended_by_mac):
+            raise IntegrationError("Vendor tag inventories do not match")
+
+        merged_templates: list[dict[str, Any]] = []
+        catalog_fields = {
+            "descriptor", "width", "height", "mappingtype", "type", "backgroundID",
+            "backgroundId", "updateTime", "updatetime", "styleFileds", "rotate", "userid",
+        }
+        for item in templates:
+            key = str(item["id"])
+            catalog_item = catalog_by_id[key]
+            mms_name = item.get("name")
+            catalog_name = catalog_item.get("name")
+            if (mms_name not in (None, "") and catalog_name not in (None, "")
+                    and str(mms_name).strip() != str(catalog_name).strip()):
+                raise IntegrationError("Vendor template names conflict")
+            dimensions = re.fullmatch(
+                r"\s*(\d+)\s*[xX×]\s*(\d+)\s*", str(item.get("styleLen") or "")
+            )
+            if dimensions is not None:
+                mms_width, mms_height = map(int, dimensions.groups())
+                catalog_width = self._vendor_integer(catalog_item, "width", minimum=1)
+                catalog_height = self._vendor_integer(catalog_item, "height", minimum=1)
+                if (mms_width, mms_height) != (catalog_width, catalog_height):
+                    raise IntegrationError("Vendor template dimensions conflict")
+            elif item.get("width") is not None or item.get("height") is not None:
+                if item.get("width") is None or item.get("height") is None:
+                    raise IntegrationError("Invalid vendor template dimensions")
+                if (self._vendor_integer(item, "width", minimum=1)
+                        != self._vendor_integer(catalog_item, "width", minimum=1)
+                        or self._vendor_integer(item, "height", minimum=1)
+                        != self._vendor_integer(catalog_item, "height", minimum=1)):
+                    raise IntegrationError("Vendor template dimensions conflict")
+            merged = dict(item)
+            for field in catalog_fields:
+                if field in catalog_item:
+                    merged[field] = catalog_item[field]
+            if not merged.get("name"):
+                merged["name"] = catalog_name
+            merged_templates.append(merged)
+        templates = merged_templates
+
+        immutable_tag_fields = {
+            "width", "height", "styleId", "ido", "routerStatus", "sub",
+        }
+        merged_tags: list[dict[str, Any]] = []
+        for item in tags:
+            key = str(item["mac"])
+            extended = extended_by_mac[key]
+            for field in immutable_tag_fields:
+                if field in item and field in extended:
+                    left = self._vendor_integer(item, field)
+                    right = self._vendor_integer(extended, field)
+                    if left != right:
+                        raise IntegrationError(f"Vendor tag field conflicts: {field}")
+            merged_tags.append({**extended, **item})
+        tags = merged_tags
         with self.storage.connection() as connection:
             for item in routers:
                 self.upsert_vendor_router(connection, item)

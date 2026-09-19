@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import os
@@ -42,6 +43,16 @@ class DecoderTests(unittest.TestCase):
 
 
 class PaginationTests(unittest.TestCase):
+    def test_every_vendor_client_uses_a_central_five_second_gap(self):
+        client = VendorClient(VendorConfig(base_url="http://127.0.0.1/esls_new"))
+        self.assertEqual(client._minimum_request_gap, 5.0)
+        client._last_request_finished = 100.0
+        with patch("esl_web.vendor.time.monotonic", return_value=102.0), patch(
+            "esl_web.vendor.time.sleep"
+        ) as sleep_call:
+            client._wait_for_request_slot()
+        sleep_call.assert_called_once_with(3.0)
+
     def test_update_status_rejects_non_finite_and_out_of_range_values(self):
         client = VendorClient(VendorConfig(base_url="http://127.0.0.1/esls_new"))
         for value in (float("inf"), float("nan"), 1e100, "999", True, "2.5"):
@@ -52,14 +63,91 @@ class PaginationTests(unittest.TestCase):
         client = VendorClient(VendorConfig(base_url="http://192.0.2.1/esls_new"))
         first = [{"mac": str(index)} for index in range(10)]
         second = [{"mac": str(index)} for index in range(10, 13)]
-        with patch.object(client, "_request", side_effect=[first, second, []]) as request_call, \
-             patch("esl_web.vendor.time.sleep") as sleep_call:
+        with patch.object(client, "_request", side_effect=[first, second, []]) as request_call:
             tags = client.get_tags()
         self.assertEqual(len(tags), 13)
         self.assertIn("currentPage=1", request_call.call_args_list[0].args[1])
         self.assertIn("currentPage=2", request_call.call_args_list[1].args[1])
         self.assertIn("currentPage=3", request_call.call_args_list[2].args[1])
-        self.assertEqual(sleep_call.call_count, 2)
+
+
+class ExtendedReadOnlyVendorTests(unittest.TestCase):
+    def setUp(self):
+        self.client = VendorClient(VendorConfig(base_url="http://127.0.0.1/esls_new"))
+
+    def test_extended_collections_and_template_detail_use_documented_routes(self):
+        style = {
+            "id": 10, "name": "Desk", "styleFileds": ["name", "price"],
+            "width": 400, "height": 300, "mappingtype": 1,
+        }
+        with patch.object(self.client, "_request_document", side_effect=[
+            [{"mac": "99.99.33.35", "width": 400, "height": 300}],
+            {"datalist": [style], "resultCode": 10},
+            {"datalist": [style], "resultCode": 10},
+            {"datalist": [{"id": 8, "name": "bg1", "width": 640, "height": 384}],
+             "resultCode": 10},
+        ]) as request_call:
+            self.assertEqual(len(self.client.get_extended_tags()), 1)
+            self.assertEqual(self.client.get_style_catalog()[0]["id"], 10)
+            self.assertEqual(self.client.get_style_detail(10)["styleFileds"], ["name", "price"])
+            self.assertEqual(self.client.get_photos()[0]["name"], "bg1")
+        self.assertEqual([call.args[:2] for call in request_call.call_args_list], [
+            ("GET", "/associate/getTagsMsg"),
+            ("GET", "/associate/getStyleMsgs"),
+            ("POST", "/associate/getStyleMsgById?id=10"),
+            ("GET", "/associate/getPhotos"),
+        ])
+        self.assertEqual(json.loads(request_call.call_args_list[2].args[2]), {"id": 10})
+
+    def test_documented_envelopes_fail_closed(self):
+        invalid_values = (
+            {"datalist": [], "resultCode": 0},
+            {"datalist": "not-a-list", "resultCode": 10},
+            {"datalist": ["not-an-object"], "resultCode": 10},
+        )
+        for value in invalid_values:
+            with self.subTest(value=value), patch.object(
+                self.client, "_request_document", return_value=value
+            ), self.assertRaises(VendorError):
+                self.client.get_style_catalog()
+        with self.assertRaises(VendorError):
+            self.client.get_style_detail(True)
+
+    def test_photo_data_is_bounded_validated_and_typed(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"image"
+        encoded = base64.b64encode(png).decode("ascii")
+        with patch.object(self.client, "_request_document", return_value={
+            "data": encoded, "t": encoded, "datalist": [], "resultCode": 10,
+        }):
+            data, media_type = self.client.get_photo_data("bg1")
+        self.assertEqual(data, png)
+        self.assertEqual(media_type, "image/png")
+
+        invalid_payloads = (
+            {"data": "not-base64", "datalist": [], "resultCode": 10},
+            {"data": base64.b64encode(b"not an image").decode(), "datalist": [], "resultCode": 10},
+            {"data": "A" * (VendorClient.MAX_ENCODED_IMAGE_BYTES + 1), "datalist": [], "resultCode": 10},
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload_type=len(payload["data"])), patch.object(
+                self.client, "_request_document", return_value=payload
+            ), self.assertRaises(VendorError):
+                self.client.get_photo_data("bg1")
+
+    def test_template_preview_uses_derived_same_origin_path_and_rejects_non_image(self):
+        detail = {"id": 10, "name": "Desk template", "styleFileds": []}
+        png = b"\x89PNG\r\n\x1a\n" + b"preview"
+        with patch.object(self.client, "get_style_detail", return_value=detail), patch.object(
+            self.client, "_request_bytes", return_value=(png, "image/png")
+        ) as raw_request:
+            data, media_type = self.client.get_template_preview(10)
+        self.assertEqual((data, media_type), (png, "image/png"))
+        self.assertEqual(raw_request.call_args.args[:2], ("GET", "/Desk%20template10.png"))
+
+        with patch.object(self.client, "get_style_detail", return_value=detail), patch.object(
+            self.client, "_request_bytes", return_value=(b"<html>", "text/html")
+        ), self.assertRaises(VendorError):
+            self.client.get_template_preview(10)
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -132,6 +220,21 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
             self.assert_login(body)
             self._send('<html><a href="login/logout">logout</a></html>', cookie="JSESSIONID=fake-login; Path=/esls_new; HttpOnly")
             return
+        if self.path.startswith("/esls_new/associate/getStyleMsgById?id="):
+            style_id = int(self.path.rsplit("=", 1)[1])
+            if json.loads(body) != {"id": style_id}:
+                self.send_error(400)
+                return
+            self._send(json.dumps({
+                "datalist": [{
+                    "id": style_id, "name": "Vendor template", "descriptor": "Desk template",
+                    "width": 296, "height": 128, "mappingtype": 7, "type": 2,
+                    "styleFileds": ["name", "price"], "rotate": 0, "userid": 18,
+                    "backgroundId": 8, "updatetime": "Sep 19, 2026",
+                }],
+                "resultCode": 10, "resultMsg": "success",
+            }))
+            return
         if self.path == "/esls_new/associate/updateScreen":
             if self.headers.get("Cookie") != "JSESSIONID=fake-login":
                 self.send_error(401)
@@ -184,6 +287,48 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
                 "name": "Test tag", "status": "1",
                 "updateProgress": str(self.__class__.tag_status),
             }], "resultCode": 1}))
+        elif self.path == "/esls_new/associate/getTagsMsg":
+            self._send(json.dumps([{
+                "mac": "92.91.87.80", "power": 99, "routerid": "1", "rssi": -48,
+                "showStyle": "2.9 inch", "status": 1, "styleId": 136,
+                "width": 296, "height": 128, "routerStatus": 1, "ido": 7, "sub": 0,
+            }]))
+        elif self.path == "/esls_new/associate/getStyleMsgs":
+            self._send(json.dumps({
+                "datalist": [
+                    {
+                        "id": 136, "name": "Vendor template", "descriptor": "Desk template",
+                        "width": 296, "height": 128, "mappingtype": 7, "type": 2,
+                        "backgroundID": 8, "updateTime": "Sep 19, 2026",
+                    },
+                    {
+                        "id": 138, "name": "Vendor template (137)", "descriptor": "Desk template B",
+                        "width": 296, "height": 128, "mappingtype": 8, "type": 2,
+                        "backgroundID": 0, "updateTime": "Sep 19, 2026",
+                    },
+                    {
+                        "id": 137, "name": "Vendor template", "descriptor": "Desk template C",
+                        "width": 296, "height": 128, "mappingtype": 9, "type": 2,
+                        "backgroundID": 0, "updateTime": "Sep 19, 2026",
+                    },
+                ],
+                "resultCode": 10, "resultMsg": "success",
+            }))
+        elif self.path == "/esls_new/associate/getPhotos":
+            self._send(json.dumps({
+                "datalist": [{"id": 8, "name": "bg1", "width": 640, "height": 384}],
+                "resultCode": 10, "resultMsg": "success",
+            }))
+        elif self.path == "/esls_new/associate/getPhotoDataByName?photoName=bg1":
+            encoded = base64.b64encode(b"\x89PNG\r\n\x1a\nphoto").decode("ascii")
+            self._send(json.dumps({"data": encoded, "t": encoded, "datalist": [], "resultCode": 10}))
+        elif self.path == "/esls_new/Vendor%20template136.png":
+            body = b"\x89PNG\r\n\x1a\npreview"
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         else:
             self.send_error(404)
 
@@ -205,6 +350,7 @@ class ReadOnlySyncTests(unittest.TestCase):
             username="operator", password="secret", connect_timeout=2, read_timeout=2,
         )
         self.client = VendorClient(config)
+        self.client._minimum_request_gap = 0.0
         self.app_server = create_server(
             "127.0.0.1", 0, database_path=Path(self.temporary.name) / "sync.db",
             seed=False, vendor_client=self.client,
@@ -245,6 +391,68 @@ class ReadOnlySyncTests(unittest.TestCase):
         self.assertEqual(tag["template_id"], "136")
         self.assertEqual(FakeVendorHandler.calls[0][1], "/esls_new/login/userLogin")
         self.assertTrue(all(call[2] == "JSESSIONID=fake-login" for call in FakeVendorHandler.calls[1:]))
+
+    def test_extended_sync_and_read_only_vendor_api_preserve_inventory(self):
+        request = Request(
+            self.app_base + "/api/sync/read-only", data=b"{}", method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urlopen(request, timeout=2) as response:
+            result = json.loads(response.read())
+        self.assertEqual(result["synced"], {"routers": 1, "tags": 1, "templates": 3})
+
+        with urlopen(self.app_base + "/api/tags", timeout=2) as response:
+            tag = json.loads(response.read())["items"][0]
+        self.assertEqual(tag["width"], 296)
+        self.assertEqual(tag["height"], 128)
+        self.assertEqual(tag["show_style"], "2.9 inch")
+        self.assertEqual(tag["vendor_tag_id"], 7)
+        self.assertEqual(tag["router_status"], 1)
+
+        with urlopen(self.app_base + "/api/templates", timeout=2) as response:
+            templates = json.loads(response.read())["items"]
+        template = next(item for item in templates if item["id"] == "136")
+        self.assertEqual(template["mapping_type"], 7)
+        self.assertEqual(template["descriptor"], "Desk template")
+        self.assertEqual(template["screen_type"], 2)
+        self.assertEqual(template["background_id"], 8)
+
+        with urlopen(self.app_base + "/api/vendor/templates", timeout=2) as response:
+            catalog = json.loads(response.read())["items"]
+        self.assertEqual(catalog[0]["id"], "136")
+        self.assertEqual(catalog[0]["preview_url"], "/api/vendor/templates/136/preview")
+
+        with urlopen(self.app_base + "/api/vendor/templates/136", timeout=2) as response:
+            detail = json.loads(response.read())
+        self.assertEqual(detail["style_fields"], ["name", "price"])
+        self.assertEqual(detail["user_id"], 18)
+
+        with urlopen(self.app_base + "/api/vendor/photos", timeout=2) as response:
+            photos = json.loads(response.read())["items"]
+        self.assertEqual(photos, [{
+            "id": "8", "name": "bg1", "width": 640, "height": 384,
+            "data_url": "/api/vendor/photos/bg1/data",
+        }])
+
+        with urlopen(self.app_base + "/api/vendor/photos/bg1/data", timeout=2) as response:
+            self.assertEqual(response.headers.get_content_type(), "image/png")
+            self.assertTrue(response.read().startswith(b"\x89PNG"))
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        with urlopen(self.app_base + "/api/vendor/templates/136/preview", timeout=2) as response:
+            self.assertEqual(response.headers.get_content_type(), "image/png")
+            self.assertTrue(response.read().startswith(b"\x89PNG"))
+
+    def test_read_only_sync_rejects_query_parameters_before_vendor_call(self):
+        request = Request(
+            self.app_base + "/api/sync/read-only?unexpected=", data=b"{}", method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=2)
+        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(json.loads(caught.exception.read())["error"]["code"], "validation_error")
+        caught.exception.close()
+        self.assertEqual(FakeVendorHandler.calls, [])
 
     def _dispatch_request(self, body):
         return Request(

@@ -1,12 +1,79 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from esl_web.service import ConflictError, IntegrationError, NotFoundError, Service, ValidationError
 from esl_web.storage import Storage
 
 
 class ServiceTests(unittest.TestCase):
+    def test_vendor_sync_rejects_missing_and_conflicting_merge_records(self):
+        router = {"id": "1", "ip": "127.0.0.1", "state": True, "description": "Router"}
+        mms_style = {"id": "10", "name": "Desk", "styleLen": "400x300"}
+        catalog_style = {
+            "id": 10, "name": "Desk", "descriptor": "Desk", "width": 400,
+            "height": 300, "mappingtype": 1, "type": 2,
+        }
+        mms_tag = {
+            "mac": "99.99.33.35", "power": 90, "routerMac": "1", "styleName": "Desk",
+            "updateProgress": 1,
+        }
+        extended_tag = {
+            "mac": "99.99.33.35", "power": 89, "routerid": "1", "styleId": 10,
+            "status": 1, "width": 400, "height": 300, "rssi": -50,
+        }
+        cases = (
+            {"templates": [mms_style], "catalog": [catalog_style],
+             "tags": [mms_tag], "extended": []},
+            {"templates": [mms_style], "catalog": [catalog_style],
+             "tags": [], "extended": [extended_tag]},
+            {"templates": [mms_style], "catalog": [], "tags": [], "extended": []},
+            {"templates": [mms_style], "catalog": [{**catalog_style, "name": "Other"}],
+             "tags": [], "extended": []},
+        )
+        for case in cases:
+            client = Mock()
+            client.get_routers.return_value = [router]
+            client.get_templates.return_value = case["templates"]
+            client.get_tags.return_value = case["tags"]
+            client.get_style_catalog.return_value = case["catalog"]
+            client.get_extended_tags.return_value = case["extended"]
+            with self.subTest(case=case), self.assertRaises(IntegrationError):
+                self.service.sync_read_only(client)
+
+    def test_schema_migration_preserves_existing_template_and_tag_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.db"
+            connection = sqlite3.connect(path)
+            connection.executescript("""
+                CREATE TABLE templates (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, width INTEGER NOT NULL,
+                    height INTEGER NOT NULL, mapping_type INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE tags (
+                    id TEXT PRIMARY KEY, mac TEXT NOT NULL UNIQUE, label TEXT, width INTEGER NOT NULL,
+                    height INTEGER NOT NULL, battery INTEGER NOT NULL, rssi INTEGER NOT NULL,
+                    status TEXT NOT NULL, router_id TEXT, template_id TEXT, last_seen_at TEXT
+                );
+                INSERT INTO templates VALUES ('10', 'Kept template', 400, 300, 1);
+                INSERT INTO tags VALUES ('tag-1', '99.99.33.35', 'Kept tag', 400, 300, 90, -50,
+                                         'ready', NULL, '10', '2026-01-01T00:00:00Z');
+            """)
+            connection.commit()
+            connection.close()
+
+            storage = Storage(path)
+            storage.initialize()
+            with storage.connection() as migrated:
+                self.assertEqual(migrated.execute("SELECT COUNT(*) FROM templates").fetchone()[0], 1)
+                self.assertEqual(migrated.execute("SELECT COUNT(*) FROM tags").fetchone()[0], 1)
+                template_columns = {row[1] for row in migrated.execute("PRAGMA table_info(templates)")}
+                tag_columns = {row[1] for row in migrated.execute("PRAGMA table_info(tags)")}
+            self.assertTrue({"descriptor", "style_fields", "background_id"} <= template_columns)
+            self.assertTrue({"show_style", "vendor_tag_id", "router_status"} <= tag_columns)
+
     def test_vendor_integer_value_rejects_ambiguous_or_invalid_numbers(self):
         for value in (True, 1.5, "1.5", "invalid", float("inf"), 1e100,
                       str(2**63), str(-(2**63) - 1)):

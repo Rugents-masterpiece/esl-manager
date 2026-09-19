@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,7 +34,14 @@ CREATE TABLE IF NOT EXISTS templates (
     name TEXT NOT NULL UNIQUE,
     width INTEGER NOT NULL CHECK(width > 0),
     height INTEGER NOT NULL CHECK(height > 0),
-    mapping_type INTEGER NOT NULL DEFAULT 0
+    mapping_type INTEGER NOT NULL DEFAULT 0,
+    descriptor TEXT,
+    screen_type INTEGER,
+    background_id INTEGER,
+    vendor_updated_at TEXT,
+    style_fields TEXT NOT NULL DEFAULT '[]',
+    rotate INTEGER,
+    user_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS tags (
     id TEXT PRIMARY KEY,
@@ -46,7 +54,18 @@ CREATE TABLE IF NOT EXISTS tags (
     status TEXT NOT NULL CHECK(status IN ('ready', 'updating', 'failed', 'success')),
     router_id TEXT REFERENCES routers(id) ON DELETE SET NULL,
     template_id TEXT REFERENCES templates(id) ON DELETE SET NULL,
-    last_seen_at TEXT
+    last_seen_at TEXT,
+    show_style TEXT,
+    vendor_tag_id INTEGER,
+    router_status INTEGER,
+    sub INTEGER
+);
+CREATE TABLE IF NOT EXISTS vendor_photos (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    width INTEGER NOT NULL CHECK(width > 0),
+    height INTEGER NOT NULL CHECK(height > 0),
+    synced_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS product_tags (
     product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -136,11 +155,34 @@ class Storage:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as connection:
             connection.executescript(SCHEMA)
+            self._ensure_columns(connection, "templates", {
+                "descriptor": "TEXT",
+                "screen_type": "INTEGER",
+                "background_id": "INTEGER",
+                "vendor_updated_at": "TEXT",
+                "style_fields": "TEXT NOT NULL DEFAULT '[]'",
+                "rotate": "INTEGER",
+                "user_id": "INTEGER",
+            })
+            self._ensure_columns(connection, "tags", {
+                "show_style": "TEXT",
+                "vendor_tag_id": "INTEGER",
+                "router_status": "INTEGER",
+                "sub": "INTEGER",
+            })
+
+    @staticmethod
+    def _ensure_columns(connection: sqlite3.Connection, table: str,
+                        columns: dict[str, str]) -> None:
+        existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        for name, definition in columns.items():
+            if name not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
     def seed_demo(self) -> None:
         """Insert deterministic sample data without duplicating rows."""
         statements = (
-            ("INSERT OR IGNORE INTO templates VALUES (?, ?, ?, ?, ?)",
+            ("INSERT OR IGNORE INTO templates(id, name, width, height, mapping_type) VALUES (?, ?, ?, ?, ?)",
              ("tpl-default", "Základná cenovka", 296, 128, 0)),
             ("INSERT OR IGNORE INTO routers VALUES (?, ?, ?, ?, ?)",
              ("router-main", "Predajňa", "192.0.2.10", "online", "2026-01-01T09:00:00Z")),
@@ -148,9 +190,9 @@ class Storage:
              ("prod-coffee", "SKU-COFFEE", "8580000000011", "Káva", 6.49, "EUR", "tpl-default", "2026-01-01T09:00:00Z", "2026-01-01T09:00:00Z")),
             ("INSERT OR IGNORE INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
              ("prod-tea", "SKU-TEA", "8580000000028", "Čaj", 3.29, "EUR", "tpl-default", "2026-01-01T09:00:00Z", "2026-01-01T09:00:00Z")),
-            ("INSERT OR IGNORE INTO tags VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("INSERT OR IGNORE INTO tags(id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
              ("tag-001", "00:11:22:33:44:55", "Regál A", 296, 128, 88, -55, "ready", "router-main", "tpl-default", "2026-01-01T09:00:00Z")),
-            ("INSERT OR IGNORE INTO tags VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("INSERT OR IGNORE INTO tags(id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
              ("tag-002", "00:11:22:33:44:66", "Regál B", 296, 128, 15, -82, "failed", "router-main", "tpl-default", "2026-01-01T08:55:00Z")),
             ("INSERT OR IGNORE INTO product_tags VALUES (?, ?, ?)",
              ("prod-coffee", "tag-001", "2026-01-01T09:00:00Z")),
@@ -190,20 +232,42 @@ class Storage:
     def upsert_template(self, connection: sqlite3.Connection, template: dict) -> None:
         """Insert or update one normalized vendor template in an existing transaction."""
         connection.execute(
-            "INSERT INTO templates(id, name, width, height, mapping_type) VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO templates(id, name, width, height, mapping_type, descriptor, screen_type, "
+            "background_id, vendor_updated_at, style_fields, rotate, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET name=excluded.name, width=excluded.width, "
-            "height=excluded.height, mapping_type=excluded.mapping_type",
-            (template["id"], template["name"], template["width"], template["height"], template["mapping_type"]),
+            "height=excluded.height, mapping_type=excluded.mapping_type, descriptor=excluded.descriptor, "
+            "screen_type=excluded.screen_type, background_id=excluded.background_id, "
+            "vendor_updated_at=excluded.vendor_updated_at, style_fields=excluded.style_fields, "
+            "rotate=excluded.rotate, user_id=excluded.user_id",
+            (template["id"], template["name"], template["width"], template["height"],
+             template["mapping_type"], template.get("descriptor"), template.get("screen_type"),
+             template.get("background_id"), template.get("vendor_updated_at"),
+             json.dumps(template.get("style_fields", []), ensure_ascii=False),
+             template.get("rotate"), template.get("user_id")),
         )
 
     def upsert_tag(self, connection: sqlite3.Connection, tag: dict) -> None:
         """Insert or update one normalized vendor tag in an existing transaction."""
         connection.execute(
-            "INSERT INTO tags(id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "INSERT INTO tags(id, mac, label, width, height, battery, rssi, status, router_id, template_id, "
+            "last_seen_at, show_style, vendor_tag_id, router_status, sub) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET mac=excluded.mac, label=excluded.label, width=excluded.width, "
             "height=excluded.height, battery=excluded.battery, rssi=excluded.rssi, status=excluded.status, "
-            "router_id=excluded.router_id, template_id=excluded.template_id, last_seen_at=excluded.last_seen_at",
+            "router_id=excluded.router_id, template_id=excluded.template_id, last_seen_at=excluded.last_seen_at, "
+            "show_style=excluded.show_style, vendor_tag_id=excluded.vendor_tag_id, "
+            "router_status=excluded.router_status, sub=excluded.sub",
             (tag["id"], tag["mac"], tag["label"], tag["width"], tag["height"], tag["battery"],
-             tag["rssi"], tag["status"], tag["router_id"], tag["template_id"], tag["last_seen_at"]),
+             tag["rssi"], tag["status"], tag["router_id"], tag["template_id"], tag["last_seen_at"],
+             tag.get("show_style"), tag.get("vendor_tag_id"), tag.get("router_status"), tag.get("sub")),
+        )
+
+    def replace_vendor_photos(self, connection: sqlite3.Connection,
+                              photos: list[dict], synced_at: str) -> None:
+        connection.execute("DELETE FROM vendor_photos")
+        connection.executemany(
+            "INSERT INTO vendor_photos(id, name, width, height, synced_at) VALUES (?, ?, ?, ?, ?)",
+            [(photo["id"], photo["name"], photo["width"], photo["height"], synced_at)
+             for photo in photos],
         )

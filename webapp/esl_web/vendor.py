@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import http.cookiejar
 import json
 import math
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import (
     HTTPCookieProcessor,
     HTTPRedirectHandler,
@@ -123,8 +126,8 @@ class VendorConfig:
         )
 
 
-def decode_response(raw: bytes | str):
-    """Decode the inconsistent response shapes returned by the ESL controller."""
+def decode_document(raw: bytes | str):
+    """Decode nested vendor JSON without discarding envelope metadata."""
     if isinstance(raw, bytes):
         text = raw.decode("utf-8")
     elif isinstance(raw, str):
@@ -140,10 +143,16 @@ def decode_response(raw: bytes | str):
         if isinstance(decoded, str):
             value = decoded
             continue
-        if isinstance(decoded, dict) and isinstance(decoded.get("datalist"), list):
-            return decoded["datalist"]
         return decoded
     return value
+
+
+def decode_response(raw: bytes | str):
+    """Decode a vendor response and unwrap its common datalist envelope."""
+    decoded = decode_document(raw)
+    if isinstance(decoded, dict) and isinstance(decoded.get("datalist"), list):
+        return decoded["datalist"]
+    return decoded
 
 
 class VendorError(RuntimeError):
@@ -162,11 +171,23 @@ class _NoRedirect(HTTPRedirectHandler):
 class VendorClient:
     """Small authenticated HTTP client exposing only approved ESL operations."""
 
+    MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+    MAX_IMAGE_BYTES = 5 * 1024 * 1024
+    MAX_ENCODED_IMAGE_BYTES = ((MAX_IMAGE_BYTES + 2) // 3) * 4
+
     def __init__(self, config: VendorConfig):
         self.config = config
         self._cookies = http.cookiejar.CookieJar()
         self._opener = build_opener(HTTPCookieProcessor(self._cookies), _NoRedirect())
         self._logged_in = False
+        self._request_lock = threading.RLock()
+        self._last_request_finished = 0.0
+        self._minimum_request_gap = 5.0
+
+    def _wait_for_request_slot(self) -> None:
+        remaining = self._minimum_request_gap - (time.monotonic() - self._last_request_finished)
+        if remaining > 0:
+            time.sleep(remaining)
 
     def _set_read_timeout(self, response) -> None:
         # urllib has one public timeout argument. Set the connected socket separately
@@ -176,29 +197,54 @@ class VendorClient:
         except AttributeError:
             pass
 
+    def _request_bytes(self, method: str, path: str, body: bytes | None = None,
+                       content_type: str | None = None, *, authenticate: bool = True,
+                       max_bytes: int | None = None) -> tuple[bytes, str]:
+        with self._request_lock:
+            if authenticate:
+                self._login_if_needed()
+            self._wait_for_request_slot()
+            request = Request(self.config.base_url + path, data=body, method=method)
+            request.add_header("Accept", "application/json, text/plain, */*")
+            request.add_header("X-Requested-With", "XMLHttpRequest")
+            if content_type:
+                request.add_header("Content-Type", content_type)
+            if self.config.session:
+                request.add_header("Cookie", f"JSESSIONID={self.config.session}")
+            try:
+                with self._opener.open(request, timeout=self.config.connect_timeout) as response:
+                    self._set_read_timeout(response)
+                    limit = self.MAX_RESPONSE_BYTES if max_bytes is None else max_bytes
+                    raw = response.read(limit + 1)
+                    if response.status >= 400:
+                        raise VendorError(f"Vendor returned HTTP {response.status}")
+                    response_type = response.headers.get_content_type()
+            except HTTPError as error:
+                error.close()
+                raise VendorError(f"Vendor returned HTTP {error.code}") from error
+            except (URLError, TimeoutError, OSError) as error:
+                raise VendorError("Vendor request failed") from error
+            finally:
+                self._last_request_finished = time.monotonic()
+            if len(raw) > limit:
+                raise VendorError("Vendor response exceeded the configured size limit")
+            return raw, response_type
+
+    def _request_document(self, method: str, path: str, body: bytes | None = None,
+                          content_type: str | None = None, *, authenticate: bool = True) -> Any:
+        raw, _ = self._request_bytes(
+            method, path, body, content_type, authenticate=authenticate
+        )
+        return decode_document(raw)
+
     def _request(self, method: str, path: str, body: bytes | None = None,
                  content_type: str | None = None, *, authenticate: bool = True) -> Any:
-        if authenticate:
-            self._login_if_needed()
-        request = Request(self.config.base_url + path, data=body, method=method)
-        request.add_header("Accept", "application/json, text/plain, */*")
-        request.add_header("X-Requested-With", "XMLHttpRequest")
-        if content_type:
-            request.add_header("Content-Type", content_type)
-        if self.config.session:
-            request.add_header("Cookie", f"JSESSIONID={self.config.session}")
-        try:
-            with self._opener.open(request, timeout=self.config.connect_timeout) as response:
-                self._set_read_timeout(response)
-                raw = response.read()
-                if response.status >= 400:
-                    raise VendorError(f"Vendor returned HTTP {response.status}")
-        except HTTPError as error:
-            error.close()
-            raise VendorError(f"Vendor returned HTTP {error.code}") from error
-        except (URLError, TimeoutError, OSError) as error:
-            raise VendorError("Vendor request failed") from error
-        return decode_response(raw)
+        value = self._request_document(
+            method, path, body, content_type, authenticate=authenticate
+        )
+        if isinstance(value, dict) and isinstance(value.get("datalist"), list):
+            return value["datalist"]
+        return value
 
     def _login_if_needed(self) -> None:
         if self.config.session or self._logged_in or not self.config.username:
@@ -248,8 +294,6 @@ class VendorClient:
         tags: list[dict[str, Any]] = []
         seen: set[str] = set()
         page_fingerprints: set[tuple[str, ...]] = set()
-        hostname = urlsplit(self.config.base_url).hostname
-        delay = 0 if hostname in {"127.0.0.1", "localhost", "::1"} else 5
         for page in range(1, 101):
             collection = self._collection(
                 self._request(
@@ -267,9 +311,100 @@ class VendorClient:
                 if identity not in seen:
                     seen.add(identity)
                     tags.append(item)
-            if delay:
-                time.sleep(delay)
         raise VendorError("Vendor tag pagination exceeded 100 pages")
+
+    @staticmethod
+    def _documented_collection(value: Any, resource: str) -> list[dict[str, Any]]:
+        if not isinstance(value, dict) or value.get("resultCode") != 10:
+            raise VendorError(f"Invalid vendor {resource} response")
+        items = value.get("datalist")
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise VendorError(f"Invalid vendor {resource} response")
+        return items
+
+    @staticmethod
+    def _resource_name(value: Any, field: str) -> str:
+        if (not isinstance(value, str) or not value.strip() or len(value.strip()) > 200
+                or any(ord(character) < 32 or character in "/\\?#" for character in value)):
+            raise VendorError(f"Invalid vendor {field}")
+        return value.strip()
+
+    @staticmethod
+    def _image_type(data: bytes) -> str | None:
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if data.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if data.startswith((b"GIF87a", b"GIF89a")):
+            return "image/gif"
+        if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            return "image/webp"
+        if data.startswith(b"BM"):
+            return "image/bmp"
+        return None
+
+    def get_extended_tags(self) -> list[dict[str, Any]]:
+        value = self._request_document("GET", "/associate/getTagsMsg")
+        return self._collection(value, "extended tags")
+
+    def get_style_catalog(self) -> list[dict[str, Any]]:
+        value = self._request_document("GET", "/associate/getStyleMsgs")
+        return self._documented_collection(value, "style catalog")
+
+    def get_style_detail(self, style_id: int) -> dict[str, Any]:
+        if isinstance(style_id, bool) or not isinstance(style_id, int) or style_id < 0:
+            raise VendorError("Invalid vendor style id")
+        body = json.dumps({"id": style_id}, separators=(",", ":")).encode("utf-8")
+        value = self._request_document(
+            "POST", f"/associate/getStyleMsgById?id={style_id}", body,
+            "application/json; charset=UTF-8",
+        )
+        items = self._documented_collection(value, "style detail")
+        if len(items) != 1 or items[0].get("id") != style_id:
+            raise VendorError("Invalid vendor style detail response")
+        return items[0]
+
+    def get_photos(self) -> list[dict[str, Any]]:
+        value = self._request_document("GET", "/associate/getPhotos")
+        return self._documented_collection(value, "photos")
+
+    def get_photo_data(self, photo_name: str) -> tuple[bytes, str]:
+        name = self._resource_name(photo_name, "photo name")
+        value = self._request_document(
+            "GET", "/associate/getPhotoDataByName?" + urlencode({"photoName": name})
+        )
+        if not isinstance(value, dict) or value.get("resultCode") != 10:
+            raise VendorError("Invalid vendor photo data response")
+        encoded = value.get("data")
+        duplicate = value.get("t")
+        if (not isinstance(encoded, str) or not encoded
+                or len(encoded) > self.MAX_ENCODED_IMAGE_BYTES):
+            raise VendorError("Invalid vendor photo data response")
+        if duplicate not in (None, encoded):
+            raise VendorError("Vendor photo data fields disagree")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise VendorError("Invalid vendor photo encoding") from error
+        if not data or len(data) > self.MAX_IMAGE_BYTES:
+            raise VendorError("Vendor photo exceeded the configured size limit")
+        media_type = self._image_type(data)
+        if media_type is None:
+            raise VendorError("Vendor photo is not a supported image")
+        return data, media_type
+
+    def get_template_preview(self, style_id: int) -> tuple[bytes, str]:
+        detail = self.get_style_detail(style_id)
+        name = self._resource_name(detail.get("name"), "style name")
+        path = "/" + quote(f"{name}{style_id}.png", safe="")
+        data, declared_type = self._request_bytes(
+            "GET", path, max_bytes=self.MAX_IMAGE_BYTES
+        )
+        detected_type = self._image_type(data)
+        if (not declared_type.startswith("image/") or detected_type is None
+                or declared_type != detected_type):
+            raise VendorError("Vendor preview is not a valid image")
+        return data, detected_type
 
     def update_screen(self, updates: list[dict[str, Any]], confirmation: str) -> list[dict[str, Any]]:
         """Dispatch updates only when double-gated, then confirm status by read-back."""

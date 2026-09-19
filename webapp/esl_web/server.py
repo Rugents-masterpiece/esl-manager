@@ -155,6 +155,25 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
+    def _binary_image(self, data: bytes, media_type: str) -> None:
+        allowed = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"}
+        if not isinstance(data, bytes) or not data or media_type not in allowed:
+            raise IntegrationError("Vendor image returned invalid data")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", media_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")
+        self.end_headers()
+        self.wfile.write(data)
+
+    @staticmethod
+    def _vendor_client(server: EslHTTPServer) -> VendorClient:
+        if server.vendor_client is None:
+            raise IntegrationError("Vendor integration is not configured")
+        return server.vendor_client
+
     def _session_id(self) -> str | None:
         raw_cookie = self.headers.get("Cookie")
         if not raw_cookie:
@@ -233,7 +252,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _mutation(self, method: str) -> None:
         try:
-            path = urlsplit(self.path).path.rstrip("/") or "/"
+            split = urlsplit(self.path)
+            path = split.path.rstrip("/") or "/"
             service = cast(EslHTTPServer, self.server).service
             server = cast(EslHTTPServer, self.server)
             if method == "POST" and path == "/api/session":
@@ -245,6 +265,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 raise ForbiddenError("API mutations are restricted to the local host")
             if method == "POST" and path == "/api/sync/read-only":
+                if split.query:
+                    raise ValidationError("Read-only sync does not accept query parameters")
                 if self._body() != {}:
                     raise ValidationError("Read-only sync body must be an empty object")
                 client = server.vendor_client
@@ -370,6 +392,41 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"items": service.list_routers(status=self._single(query, "status"))})
             elif path == "/api/templates":
                 self._json(HTTPStatus.OK, {"items": service.list_templates(search=self._single(query, "search"))})
+            elif path == "/api/vendor/templates":
+                if query:
+                    raise ValidationError("Vendor template catalog does not accept query parameters")
+                self._json(HTTPStatus.OK, {
+                    "items": service.vendor_style_catalog(self._vendor_client(server))
+                })
+            elif path.startswith("/api/vendor/templates/"):
+                parts = path.removeprefix("/api/vendor/templates/").split("/")
+                raw_id = unquote(parts[0]) if parts else ""
+                if re.fullmatch(r"\d{1,10}", raw_id) is None:
+                    raise ValidationError("Invalid style id", details={"field": "style_id"})
+                style_id = int(raw_id)
+                if style_id > 2_147_483_647 or query:
+                    raise ValidationError("Invalid style id", details={"field": "style_id"})
+                client = self._vendor_client(server)
+                if len(parts) == 1:
+                    self._json(HTTPStatus.OK, service.vendor_style_detail(client, style_id))
+                elif parts == [raw_id, "preview"]:
+                    self._binary_image(*service.vendor_template_preview(client, style_id))
+                else:
+                    raise NotFoundError("Route not found")
+            elif path == "/api/vendor/photos":
+                if query:
+                    raise ValidationError("Vendor photo catalog does not accept query parameters")
+                self._json(HTTPStatus.OK, {
+                    "items": service.vendor_photos(self._vendor_client(server))
+                })
+            elif path.startswith("/api/vendor/photos/"):
+                parts = path.removeprefix("/api/vendor/photos/").split("/")
+                if len(parts) != 2 or parts[1] != "data" or query:
+                    raise NotFoundError("Route not found")
+                photo_name = unquote(parts[0])
+                self._binary_image(*service.vendor_photo_data(
+                    self._vendor_client(server), photo_name
+                ))
             elif path == "/api/jobs":
                 self._json(HTTPStatus.OK, {"items": service.list_jobs(status=self._single(query, "status"))})
             elif path.startswith("/api/jobs/"):
