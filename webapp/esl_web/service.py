@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .storage import Storage
+from .vendor import live_writes_authorized
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
@@ -39,6 +40,16 @@ class NotFoundError(ServiceError):
 class ConflictError(ServiceError):
     code = "conflict"
     status = 409
+
+
+class IntegrationError(ServiceError):
+    code = "vendor_error"
+    status = 502
+
+
+class ForbiddenError(ServiceError):
+    code = "live_writes_forbidden"
+    status = 403
 
 
 def _now() -> str:
@@ -455,3 +466,165 @@ class Service:
             item["details"] = json.loads(item["details"])
             results.append(item)
         return results
+
+    @staticmethod
+    def _vendor_integer(item: dict[str, Any], field: str, *, minimum: int | None = None,
+                        maximum: int | None = None) -> int:
+        value = item.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise IntegrationError(f"Invalid vendor field: {field}")
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as error:
+            raise IntegrationError(f"Invalid vendor field: {field}") from error
+        if isinstance(value, float) and not value.is_integer():
+            raise IntegrationError(f"Invalid vendor field: {field}")
+        if ((minimum is not None and number < minimum)
+                or (maximum is not None and number > maximum)):
+            raise IntegrationError(f"Invalid vendor field: {field}")
+        return number
+
+    @staticmethod
+    def _vendor_id(value: Any, field: str) -> str:
+        if value is None or isinstance(value, bool):
+            raise IntegrationError(f"Invalid vendor field: {field}")
+        try:
+            return _identifier(str(value), field)
+        except ValidationError as error:
+            raise IntegrationError(f"Invalid vendor field: {field}") from error
+
+    def upsert_vendor_router(self, connection: sqlite3.Connection, item: dict[str, Any]) -> None:
+        router_id = self._vendor_id(item.get("routerID"), "routerID")
+        address = _text(item.get("routerIP"), "routerIP")
+        heartbeat = item.get("lastHeartbeatTime")
+        last_seen = None
+        if heartbeat is not None:
+            milliseconds = self._vendor_integer(item, "lastHeartbeatTime", minimum=0)
+            try:
+                last_seen = datetime.fromtimestamp(milliseconds / 1000, UTC).isoformat(
+                    timespec="seconds"
+                ).replace("+00:00", "Z")
+            except (OverflowError, OSError, ValueError) as error:
+                raise IntegrationError("Invalid vendor field: lastHeartbeatTime") from error
+        state = self._vendor_integer(item, "state")
+        self.storage.upsert_router(connection, {
+            "id": router_id,
+            "name": f"Router {router_id}",
+            "address": address,
+            "status": "online" if state == 1 else "offline",
+            "last_seen_at": last_seen,
+        })
+
+    def upsert_vendor_template(self, connection: sqlite3.Connection, item: dict[str, Any]) -> None:
+        template_id = self._vendor_id(item.get("id"), "id")
+        self.storage.upsert_template(connection, {
+            "id": template_id,
+            "name": _text(item.get("name") or item.get("descriptor"), "name"),
+            "width": self._vendor_integer(item, "width", minimum=1),
+            "height": self._vendor_integer(item, "height", minimum=1),
+            "mapping_type": self._vendor_integer(item, "mappingtype"),
+        })
+
+    def upsert_vendor_tag(self, connection: sqlite3.Connection, item: dict[str, Any],
+                          router_ids: set[str], template_ids: set[str]) -> None:
+        mac = _text(item.get("mac"), "mac")
+        tag_id = self._vendor_id(mac, "mac")
+        router_value = item.get("routerid")
+        router_id = None if router_value in (None, "", 0, "0") else self._vendor_id(router_value, "routerid")
+        if router_id not in router_ids:
+            router_id = None
+        template_value = item.get("styleId")
+        template_id = None if template_value in (None, "", 0, "0") else self._vendor_id(template_value, "styleId")
+        if template_id not in template_ids:
+            template_id = None
+        status_number = self._vendor_integer(item, "status")
+        statuses = {1: "ready", 2: "updating", 3: "failed", 4: "success"}
+        if status_number not in statuses:
+            raise IntegrationError("Invalid vendor field: status")
+        label_value = item.get("showStyle")
+        label = _text(label_value, "showStyle", required=False) if label_value else None
+        self.storage.upsert_tag(connection, {
+            "id": tag_id,
+            "mac": mac,
+            "label": label,
+            "width": self._vendor_integer(item, "width", minimum=1),
+            "height": self._vendor_integer(item, "height", minimum=1),
+            "battery": self._vendor_integer(item, "power", minimum=0, maximum=100),
+            "rssi": self._vendor_integer(item, "rssi"),
+            "status": statuses[status_number],
+            "router_id": router_id,
+            "template_id": template_id,
+            "last_seen_at": _now(),
+        })
+
+    def sync_read_only(self, client: Any) -> dict[str, dict[str, int]]:
+        """Fetch approved read-only collections and atomically upsert local inventory."""
+        try:
+            routers = client.get_routers()
+            templates = client.get_templates()
+            tags = client.get_tags()
+        except Exception as error:
+            raise IntegrationError("Vendor read-only sync failed") from error
+        if any(not isinstance(collection, list) for collection in (routers, templates, tags)):
+            raise IntegrationError("Vendor read-only sync returned invalid data")
+        with self.storage.connection() as connection:
+            for item in routers:
+                self.upsert_vendor_router(connection, item)
+            for item in templates:
+                self.upsert_vendor_template(connection, item)
+            router_ids = {str(item.get("routerID")) for item in routers}
+            template_ids = {str(item.get("id")) for item in templates}
+            for item in tags:
+                self.upsert_vendor_tag(connection, item, router_ids, template_ids)
+            counts = {"routers": len(routers), "templates": len(templates), "tags": len(tags)}
+            self._audit(connection, "vendor.sync.read_only", "system", "vendor", counts)
+        return {"synced": counts}
+
+    def dispatch_live(self, client: Any, data: Any) -> dict[str, Any]:
+        """Validate, double-gate and read-back a physical updateScreen dispatch."""
+        confirmation = data.get("confirmation") if isinstance(data, dict) else None
+        if not live_writes_authorized(confirmation):
+            raise ForbiddenError("Live ESL writes are disabled or not explicitly confirmed")
+        if not isinstance(data, dict) or set(data) != {"confirmation", "updates"}:
+            raise ValidationError("JSON body must contain only confirmation and updates")
+        updates = data["updates"]
+        if not isinstance(updates, list) or not updates or len(updates) > 500:
+            raise ValidationError("updates must be a non-empty list", details={"field": "updates"})
+        macs: set[str] = set()
+        for update in updates:
+            if not isinstance(update, dict):
+                raise ValidationError("Each update must be an object", details={"field": "updates"})
+            required = {"mac", "styleid", "mappingtype", "ABDisplayFlag"}
+            if not required.issubset(update):
+                raise ValidationError("Each update requires mac, styleid, mappingtype and ABDisplayFlag")
+            if any(not isinstance(key, str) or len(key) > 200 for key in update):
+                raise ValidationError("Invalid update field name")
+            mac = _text(update["mac"], "mac")
+            assert mac is not None
+            if mac in macs:
+                raise ValidationError("Duplicate update mac", details={"field": "mac"})
+            macs.add(mac)
+            try:
+                self._vendor_integer(update, "styleid", minimum=0)
+                self._vendor_integer(update, "mappingtype", minimum=0)
+                display_flag = self._vendor_integer(update, "ABDisplayFlag")
+            except IntegrationError as error:
+                raise ValidationError(error.message) from error
+            if display_flag not in {161, 162, 163}:
+                raise ValidationError("Invalid ABDisplayFlag", details={"field": "ABDisplayFlag"})
+        try:
+            verified = client.update_screen(updates, confirmation)
+        except Exception as error:
+            raise IntegrationError("Vendor display update failed or could not be verified") from error
+        statuses = {2: "updating", 4: "success", "2": "updating", "4": "success"}
+        verified_tags = [
+            {"mac": item["mac"], "status": statuses[item["status"]]}
+            for item in verified
+        ]
+        with self.storage.connection() as connection:
+            for item in verified_tags:
+                connection.execute("UPDATE tags SET status = ? WHERE mac = ?", (item["status"], item["mac"]))
+            self._audit(connection, "vendor.update_screen", "tag", ",".join(sorted(macs)), {
+                "count": len(updates), "verified_tags": verified_tags,
+            })
+        return {"dispatched": len(updates), "verified_tags": verified_tags}

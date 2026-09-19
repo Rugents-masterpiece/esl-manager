@@ -177,3 +177,33 @@ class Storage:
                 table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in self.TABLES
             }
+
+    def upsert_router(self, connection: sqlite3.Connection, router: dict) -> None:
+        """Insert or update one normalized vendor router in an existing transaction."""
+        connection.execute(
+            "INSERT INTO routers(id, name, address, status, last_seen_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, address=excluded.address, "
+            "status=excluded.status, last_seen_at=excluded.last_seen_at",
+            (router["id"], router["name"], router["address"], router["status"], router["last_seen_at"]),
+        )
+
+    def upsert_template(self, connection: sqlite3.Connection, template: dict) -> None:
+        """Insert or update one normalized vendor template in an existing transaction."""
+        connection.execute(
+            "INSERT INTO templates(id, name, width, height, mapping_type) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, width=excluded.width, "
+            "height=excluded.height, mapping_type=excluded.mapping_type",
+            (template["id"], template["name"], template["width"], template["height"], template["mapping_type"]),
+        )
+
+    def upsert_tag(self, connection: sqlite3.Connection, tag: dict) -> None:
+        """Insert or update one normalized vendor tag in an existing transaction."""
+        connection.execute(
+            "INSERT INTO tags(id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET mac=excluded.mac, label=excluded.label, width=excluded.width, "
+            "height=excluded.height, battery=excluded.battery, rssi=excluded.rssi, status=excluded.status, "
+            "router_id=excluded.router_id, template_id=excluded.template_id, last_seen_at=excluded.last_seen_at",
+            (tag["id"], tag["mac"], tag["label"], tag["width"], tag["height"], tag["battery"],
+             tag["rssi"], tag["status"], tag["router_id"], tag["template_id"], tag["last_seen_at"]),
+        )

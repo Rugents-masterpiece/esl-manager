@@ -5,14 +5,23 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .service import NotFoundError, Service, ServiceError, ValidationError
+from .service import (
+    ForbiddenError,
+    IntegrationError,
+    NotFoundError,
+    Service,
+    ServiceError,
+    ValidationError,
+)
 from .storage import Storage
+from .vendor import VendorClient, VendorConfig, VendorConfigurationError, live_writes_authorized
 
 
 def _reject_json_constant(_value: str) -> None:
@@ -22,9 +31,11 @@ def _reject_json_constant(_value: str) -> None:
 class EslHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], handler, service: Service):
+    def __init__(self, address: tuple[str, int], handler, service: Service,
+                 vendor_client: VendorClient | None = None):
         super().__init__(address, handler)
         self.service = service
+        self.vendor_client = vendor_client
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -111,7 +122,37 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             path = urlsplit(self.path).path.rstrip("/") or "/"
             service = cast(EslHTTPServer, self.server).service
-            if method == "POST" and path == "/api/products":
+            server = cast(EslHTTPServer, self.server)
+            if method == "POST" and path == "/api/sync/read-only":
+                if self._body() != {}:
+                    raise ValidationError("Read-only sync body must be an empty object")
+                client = server.vendor_client
+                if client is None:
+                    try:
+                        client = VendorClient(VendorConfig.from_env())
+                    except VendorConfigurationError as error:
+                        raise IntegrationError("Vendor integration is not configured") from error
+                self._json(HTTPStatus.OK, service.sync_read_only(client))
+            elif method == "POST" and path == "/api/dispatch/live":
+                if os.environ.get("ESL_LIVE_WRITES") != "1":
+                    self.close_connection = True
+                    raise ForbiddenError("Live ESL writes are disabled or not explicitly confirmed")
+                try:
+                    data = self._body()
+                except ValidationError as error:
+                    self.close_connection = True
+                    raise ForbiddenError(
+                        "Live ESL writes are disabled or not explicitly confirmed"
+                    ) from error
+                client = server.vendor_client
+                confirmation = data.get("confirmation") if isinstance(data, dict) else None
+                if client is None and live_writes_authorized(confirmation):
+                    try:
+                        client = VendorClient(VendorConfig.from_env())
+                    except VendorConfigurationError as error:
+                        raise IntegrationError("Vendor integration is not configured") from error
+                self._json(HTTPStatus.OK, service.dispatch_live(client, data))
+            elif method == "POST" and path == "/api/products":
                 self._json(HTTPStatus.CREATED, service.create_product(self._body()))
             elif method in {"PUT", "PATCH"} and path.startswith("/api/products/"):
                 product_id = unquote(path.removeprefix("/api/products/"))
@@ -231,7 +272,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 def create_server(host: str = "127.0.0.1", port: int = 0, *,
                   database_path: str | Path | None = None, seed: bool = True,
-                  service: Service | None = None) -> EslHTTPServer:
+                  service: Service | None = None,
+                  vendor_client: VendorClient | None = None) -> EslHTTPServer:
     """Create, but do not start, a threaded API server."""
     if service is None:
         if database_path is None:
@@ -241,4 +283,4 @@ def create_server(host: str = "127.0.0.1", port: int = 0, *,
         if seed:
             storage.seed_demo()
         service = Service(storage)
-    return EslHTTPServer((host, port), ApiHandler, service)
+    return EslHTTPServer((host, port), ApiHandler, service, vendor_client)
