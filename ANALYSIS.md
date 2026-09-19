@@ -163,3 +163,17 @@ Všetkých 18 komponentov troch zdrojov má `type="text"`. Editor zapisuje tučn
 8. Rollback smie použiť `GET /style/deleteStyles?styleid={new_id}` iba pre ID vytvorené týmto workflow, po fresh read-backu identity. Zdrojové ID 145/147/149 sa nikdy nemažú ani neupravujú.
 
 Live katalóg mal počas discovery 62 položiek a maximálne ID 153. Existujú aj staršie testovacie objekty 150 a 151; nie sú vytvorené touto úlohou a preto sa automaticky nemažú. Zachytený historický `addStyles` objekt 151 potvrdzuje, že create route pridelila nový ID, nový `mappingtype` a jeden default textový komponent. Žiadny fyzický tag nebol počas discovery zmenený.
+
+### Live vytvorené bold klony (ORB-00052)
+
+Finálny katalógový read-back obsahuje 65 položiek, teda presne tri nové objekty oproti preflight počtu 62. Jediné nové ID nad pôvodným maximom 153, ktoré vo finálnom katalógu existujú, sú 158, 159 a 160.
+
+| Nové ID | Zdroj | Názov | Rozmer | style align / screen type | mappingtype | Text bold editor/native | Layout SHA-256 | Preview SHA-256 |
+|---:|---:|---|---:|---:|---:|---:|---|---|
+| 158 | 145 | `S21BasePriceTag_V1_BOLD` | 250x122 | 9 / 2 | 282 | 6/6 / 6/6 | `9c13c9be7e61f99ed6cf482b7a22866b619a911ab313b9bed9799193fcbf895c` | `ee840a4b2e7f1fbcaf689b866ad3ec9ecac741aea69d977c9505d9d0e4f285e7` |
+| 159 | 147 | `SF21BasePriceTag_V1_BOLD` | 250x132 | 8 / 1 | 773 | 6/6 / 6/6 | `74b50a3c8888f8e47256082a7137eedfbf170d713242bb1c4eece7b67ea67a07` | `74fbad7dc8c25176c83b5f26adafe5017032c168763527149a5acb0aa00f58f1` |
+| 160 | 149 | `Default Template149_BOLD` | 296x128 | 2 / 2 | 318 | 6/6 / 6/6 | `b5156de7a39fc4e0fa435ed777986de1ec4471162b941a4162e3b79f84307479` | `ba6face1251801f872bcc48d5916c70d674d5b2e894be74834ca8d1c63311f9f` |
+
+Editorový read-back overil `font-weight=700` na všetkých 18 textoch. Nezávislý native read-back `/style/getStyleData` overil `fontBold="bold"` na rovnakých 18 textoch. Server pri uložení normalizuje poradie komponentov, číselný/string tvar `font-weight` a `mpname`; dynamické polia sa preto overujú autoritatívnym `styleFileds` setom a native komponenty podľa serverových ID a interného `name`, pričom všetky ostatné native polia musia zostať zhodné so zdrojom.
+
+Počas sprísňovania live read-back kontraktu vznikli štyri dočasné kandidáty v rozsahu ID 154–157. Každý zlyhal na fail-closed verifikácii, bol identifikovaný ako objekt vlastnený konkrétnym create volaním, rollback-zmazaný a jeho neprítomnosť bola overená čerstvým katalógom. Zdrojové layout a preview hashe ID 145, 147 a 149 po všetkých operáciách zostali presne zhodné s preflight hodnotami uvedenými vyššie. Fyzické operácie `updateScreen` a `delTagsByMac` sa nevolali.
