@@ -829,6 +829,34 @@ class Service:
                     record[field_name] = sorted(record[field_name])
         return cls._clone_hash(normalized)
 
+    @staticmethod
+    def _difference_paths(expected: Any, actual: Any, prefix: str = "") -> list[str]:
+        if type(expected) is not type(actual):
+            return [prefix or "root"]
+        if isinstance(expected, dict):
+            paths: list[str] = []
+            for key in sorted(set(expected) | set(actual)):
+                path = f"{prefix}.{key}" if prefix else str(key)
+                if key not in expected or key not in actual:
+                    paths.append(path)
+                else:
+                    paths.extend(Service._difference_paths(expected[key], actual[key], path))
+                if len(paths) >= 20:
+                    break
+            return paths[:20]
+        if isinstance(expected, list):
+            if len(expected) != len(actual):
+                return [f"{prefix}.length" if prefix else "length"]
+            paths = []
+            for index, (expected_item, actual_item) in enumerate(zip(expected, actual)):
+                paths.extend(Service._difference_paths(
+                    expected_item, actual_item, f"{prefix}[{index}]"
+                ))
+                if len(paths) >= 20:
+                    break
+            return paths[:20]
+        return [] if expected == actual else [prefix or "root"]
+
     @classmethod
     def _source_snapshot(cls, client: Any, source_id: int,
                          catalog_item: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -978,9 +1006,14 @@ class Service:
         if (str(target_detail.get("name", "")).strip() != target_name
                 or str(target_metadata.get("name", "")).strip() != target_name):
             raise IntegrationError("Vendor template name could not be verified")
-        if (cls._normalized_editor_layout(target_layout)
-                != cls._normalized_editor_layout(desired_layout)):
-            raise IntegrationError("Vendor template editor layout could not be verified")
+        actual_editor = cls._normalized_editor_layout(target_layout)
+        expected_editor = cls._normalized_editor_layout(desired_layout)
+        if actual_editor != expected_editor:
+            differences = cls._difference_paths(expected_editor, actual_editor)
+            raise IntegrationError(
+                "Vendor template editor layout could not be verified: "
+                + ", ".join(differences)
+            )
 
         # The controller overloads `type`: /style/getStyleData uses it for the
         # style alignment (9/8/2), while /associate/getStyleMsgById uses it for
