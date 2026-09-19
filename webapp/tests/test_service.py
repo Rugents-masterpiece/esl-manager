@@ -442,7 +442,7 @@ class ServiceTests(unittest.TestCase):
             raise RuntimeError("delete response lost")
 
         client.delete_style = ambiguous_delete
-        with self.assertRaisesRegex(IntegrationError, "save could not be verified"):
+        with self.assertRaisesRegex(IntegrationError, "could not be verified"):
             self.service.clone_vendor_template(client, {
                 "source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
             })

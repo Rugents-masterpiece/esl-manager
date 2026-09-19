@@ -973,12 +973,14 @@ class Service:
                                source_id: int, created_id: int, target_name: str) -> None:
         if (not isinstance(target_detail, dict) or target_detail.get("id") != created_id
                 or not isinstance(target_metadata, dict)
-                or target_metadata.get("id") != created_id
-                or str(target_detail.get("name", "")).strip() != target_name
-                or str(target_metadata.get("name", "")).strip() != target_name
-                or cls._normalized_editor_layout(target_layout)
+                or target_metadata.get("id") != created_id):
+            raise IntegrationError("Vendor template identity could not be verified")
+        if (str(target_detail.get("name", "")).strip() != target_name
+                or str(target_metadata.get("name", "")).strip() != target_name):
+            raise IntegrationError("Vendor template name could not be verified")
+        if (cls._normalized_editor_layout(target_layout)
                 != cls._normalized_editor_layout(desired_layout)):
-            raise IntegrationError("Vendor template save could not be verified")
+            raise IntegrationError("Vendor template editor layout could not be verified")
 
         # The controller overloads `type`: /style/getStyleData uses it for the
         # style alignment (9/8/2), while /associate/getStyleMsgById uses it for
