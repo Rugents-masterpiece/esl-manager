@@ -149,6 +149,45 @@ class ExtendedReadOnlyVendorTests(unittest.TestCase):
         ), self.assertRaises(VendorError):
             self.client.get_template_preview(10)
 
+    def test_template_clone_primitives_use_only_documented_routes_and_encodings(self):
+        source_layout = [{"id": 11, "type": "text", "feil": "price"}]
+        with patch.object(self.client, "_request_document", side_effect=[
+            json.dumps(source_layout),
+            {"datalist": [{"id": 145, "name": "Source", "dispMs": source_layout}],
+             "resultCode": 10},
+            "<input id='sytleId' value='200'/>",
+            1,
+            1,
+            {"resultCode": 10},
+            {"resultCode": 10},
+        ]) as request_call:
+            self.assertEqual(self.client.get_style_layout(145), source_layout)
+            self.assertEqual(self.client.get_style_data(145)["id"], 145)
+            self.assertEqual(self.client.create_style(9), 200)
+            self.client.add_style_field(200, 700, "text", "price")
+            self.client.rename_style(200, 9, "Source_BOLD")
+            self.client.save_style_layout(200, source_layout)
+            self.client.delete_style(200)
+
+        calls = request_call.call_args_list
+        self.assertEqual(calls[0].args[:2], ("POST", "/style/getDispMsData?id=145"))
+        self.assertEqual(calls[1].args[:2], ("GET", "/style/getStyleData?id=145"))
+        self.assertEqual(calls[2].args[:2], ("GET", "/mms/addStyles?id=0&stylealignId=9"))
+        self.assertIn("columnName=text&mappingText=price&mappingtype=700&styleid=200", calls[3].args[1])
+        self.assertIn("styleid=200&stylealign=9&styleName=Source_BOLD", calls[4].args[1])
+        self.assertEqual(calls[4].args[2], b"{}")
+        self.assertEqual(calls[5].args[:2], ("POST", "/mms/updateDispMData?id=200"))
+        self.assertEqual(parse_qs(calls[5].args[2].decode())["orderJson"],
+                         [json.dumps(source_layout, ensure_ascii=False, separators=(",", ":"))])
+        self.assertEqual(calls[6].args[:2], ("GET", "/style/deleteStyles?styleid=200"))
+
+    def test_create_style_rejects_response_without_one_safe_server_id(self):
+        for response in ("<html>missing</html>", "sytleId value=1 value=2", {"id": True}):
+            with self.subTest(response=response), patch.object(
+                self.client, "_request_document", return_value=response
+            ), self.assertRaises(VendorError):
+                self.client.create_style(9)
+
 
 class ConfigurationTests(unittest.TestCase):
     def test_configuration_loads_credentials_session_and_timeouts(self):

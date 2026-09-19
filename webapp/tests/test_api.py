@@ -3,7 +3,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -136,6 +136,75 @@ class ApiTests(unittest.TestCase):
         payload = json.loads(caught.exception.read())
         caught.exception.close()
         self.assertEqual(payload["error"]["message"], "Malformed JSON")
+
+    def test_template_clone_api_is_a_normal_authenticated_origin_checked_mutation(self):
+        token = "A" * 64
+        vendor = Mock()
+        service = Mock()
+        service.clone_vendor_template.return_value = {
+            "id": "200", "name": "S21BasePriceTag_V1_BOLD", "source_id": "145",
+        }
+        protected = create_server(
+            "127.0.0.1", 0, service=service, vendor_client=vendor, api_token=token
+        )
+        thread = threading.Thread(target=protected.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{protected.server_port}"
+        try:
+            login = Request(base + "/api/session", data=json.dumps({"token": token}).encode(),
+                            method="POST", headers={"Content-Type": "application/json"})
+            with urlopen(login, timeout=2) as response:
+                cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+            body = {"source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD"}
+            clone = Request(base + "/api/vendor/templates/clone", data=json.dumps(body).encode(),
+                            method="POST", headers={"Content-Type": "application/json",
+                                                    "Cookie": cookie, "Origin": base})
+            with urlopen(clone, timeout=2) as response:
+                self.assertEqual(response.status, 201)
+                self.assertEqual(json.loads(response.read())["id"], "200")
+            service.clone_vendor_template.assert_called_once_with(vendor, body)
+
+            cross_origin = Request(
+                base + "/api/vendor/templates/clone", data=json.dumps(body).encode(), method="POST",
+                headers={"Content-Type": "application/json", "Cookie": cookie,
+                         "Origin": "https://evil.example"},
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(cross_origin, timeout=2)
+            self.assertEqual(caught.exception.code, 403)
+            caught.exception.close()
+            self.assertEqual(service.clone_vendor_template.call_count, 1)
+        finally:
+            protected.shutdown()
+            protected.server_close()
+            thread.join(timeout=2)
+
+    def test_template_clone_preflight_vendor_failure_is_mapped_to_502(self):
+        vendor = Mock()
+        vendor.get_style_catalog.side_effect = RuntimeError("vendor unavailable")
+        protected = create_server(
+            "127.0.0.1", 0, database_path=Path(self.temporary.name) / "clone.db",
+            vendor_client=vendor,
+        )
+        thread = threading.Thread(target=protected.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = Request(
+                f"http://127.0.0.1:{protected.server_port}/api/vendor/templates/clone",
+                data=json.dumps({
+                    "source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
+                }).encode(), method="POST", headers={"Content-Type": "application/json"},
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(request, timeout=2)
+            self.assertEqual(caught.exception.code, 502)
+            payload = json.loads(caught.exception.read())
+            caught.exception.close()
+            self.assertEqual(payload["error"]["code"], "vendor_error")
+        finally:
+            protected.shutdown()
+            protected.server_close()
+            thread.join(timeout=2)
 
 
 if __name__ == "__main__":

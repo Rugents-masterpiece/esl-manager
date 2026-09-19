@@ -364,6 +364,110 @@ class VendorClient:
             raise VendorError("Invalid vendor style detail response")
         return items[0]
 
+    @staticmethod
+    def _style_id(style_id: Any) -> int:
+        if (isinstance(style_id, bool) or not isinstance(style_id, int)
+                or not 0 < style_id <= 2_147_483_647):
+            raise VendorError("Invalid vendor style id")
+        return style_id
+
+    @staticmethod
+    def _layout(value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, str):
+            value = decode_document(value)
+        if (not isinstance(value, list) or len(value) > 500
+                or any(not isinstance(item, dict) for item in value)):
+            raise VendorError("Invalid vendor style layout response")
+        return value
+
+    def get_style_layout(self, style_id: int) -> list[dict[str, Any]]:
+        style_id = self._style_id(style_id)
+        value = self._request_document(
+            "POST", f"/style/getDispMsData?id={style_id}", b"{}",
+            "application/json; charset=UTF-8",
+        )
+        return self._layout(value)
+
+    def get_style_data(self, style_id: int) -> dict[str, Any]:
+        style_id = self._style_id(style_id)
+        value = self._request_document("GET", f"/style/getStyleData?id={style_id}")
+        if isinstance(value, dict) and "datalist" in value:
+            items = self._documented_collection(value, "style data")
+            if len(items) != 1:
+                raise VendorError("Invalid vendor style data response")
+            value = items[0]
+        if not isinstance(value, dict) or value.get("id") != style_id:
+            raise VendorError("Invalid vendor style data response")
+        return value
+
+    def create_style(self, style_align_id: int) -> int:
+        style_align_id = self._style_id(style_align_id)
+        value = self._request_document(
+            "GET", f"/mms/addStyles?id=0&stylealignId={style_align_id}"
+        )
+        candidates: list[Any]
+        if isinstance(value, dict):
+            candidates = [value.get("id"), value.get("styleid"), value.get("styleId")]
+        elif isinstance(value, str):
+            candidates = re.findall(
+                r"id=[\"']sytleId[\"'][^>]*\bvalue=[\"'](\d{1,10})[\"']",
+                value,
+                flags=re.IGNORECASE,
+            )
+        else:
+            candidates = []
+        ids = {
+            int(candidate) for candidate in candidates
+            if not isinstance(candidate, bool)
+            and isinstance(candidate, (int, str))
+            and re.fullmatch(r"\d{1,10}", str(candidate))
+            and 0 < int(candidate) <= 2_147_483_647
+        }
+        if len(ids) != 1:
+            raise VendorError("Vendor create response did not identify one style")
+        return ids.pop()
+
+    def add_style_field(self, style_id: int, mapping_type: int, column_name: str,
+                        mapping_text: str) -> Any:
+        style_id = self._style_id(style_id)
+        mapping_type = self._style_id(mapping_type)
+        column = self._resource_name(column_name, "column name")
+        mapping = self._resource_name(mapping_text, "mapping text")
+        path = "/style/addColumnAndGood?" + urlencode({
+            "columnName": column, "mappingText": mapping,
+            "mappingtype": mapping_type, "styleid": style_id,
+        })
+        return self._request_document(
+            "POST", path, b"{}", "application/json; charset=UTF-8"
+        )
+
+    def rename_style(self, style_id: int, style_align_id: int, target_name: str) -> Any:
+        style_id = self._style_id(style_id)
+        style_align_id = self._style_id(style_align_id)
+        name = self._resource_name(target_name, "style name")
+        path = "/style/updateStyleAlign?" + urlencode({
+            "styleid": style_id, "stylealign": style_align_id, "styleName": name,
+        })
+        return self._request_document(
+            "POST", path, b"{}", "application/json; charset=UTF-8"
+        )
+
+    def save_style_layout(self, style_id: int, layout: list[dict[str, Any]]) -> Any:
+        style_id = self._style_id(style_id)
+        layout = self._layout(layout)
+        order_json = json.dumps(layout, ensure_ascii=False, separators=(",", ":"))
+        body = urlencode({"orderJson": order_json}).encode("utf-8")
+        return self._request_document(
+            "POST", f"/mms/updateDispMData?id={style_id}", body,
+            "application/x-www-form-urlencoded; charset=UTF-8",
+        )
+
+    def delete_style(self, style_id: int) -> None:
+        style_id = self._style_id(style_id)
+        value = self._request_document("GET", f"/style/deleteStyles?styleid={style_id}")
+        if not isinstance(value, dict) or value.get("resultCode") != 10:
+            raise VendorError("Vendor did not confirm style deletion")
+
     def get_photos(self) -> list[dict[str, Any]]:
         value = self._request_document("GET", "/associate/getPhotos")
         return self._documented_collection(value, "photos")

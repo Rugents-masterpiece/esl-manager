@@ -276,6 +276,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                     except VendorConfigurationError as error:
                         raise IntegrationError("Vendor integration is not configured") from error
                 self._json(HTTPStatus.OK, service.sync_read_only(client))
+            elif method == "POST" and path == "/api/vendor/templates/clone":
+                if split.query:
+                    raise ValidationError("Template clone does not accept query parameters")
+                self._json(
+                    HTTPStatus.CREATED,
+                    service.clone_vendor_template(self._vendor_client(server), self._body()),
+                )
             elif method == "POST" and path == "/api/dispatch/live":
                 if os.environ.get("ESL_LIVE_WRITES") != "1":
                     self.close_connection = True
