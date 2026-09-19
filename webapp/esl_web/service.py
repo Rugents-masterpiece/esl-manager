@@ -801,10 +801,13 @@ class Service:
         return hashlib.sha256(encoded).hexdigest()
 
     @classmethod
-    def _normalized_editor_layout(cls, layout: Any) -> list[dict[str, Any]]:
+    def _normalized_editor_layout(cls, layout: Any, *,
+                                  ignore_mpname: bool = False) -> list[dict[str, Any]]:
         cls._components_by_identity(layout)
         normalized = copy.deepcopy(layout)
         for component in normalized:
+            if ignore_mpname:
+                component.pop("mpname", None)
             style = component.get("style")
             if isinstance(style, dict) and "font-weight" in style:
                 value = style["font-weight"]
@@ -1006,8 +1009,11 @@ class Service:
         if (str(target_detail.get("name", "")).strip() != target_name
                 or str(target_metadata.get("name", "")).strip() != target_name):
             raise IntegrationError("Vendor template name could not be verified")
-        actual_editor = cls._normalized_editor_layout(target_layout)
-        expected_editor = cls._normalized_editor_layout(desired_layout)
+        # Saving through /mms/updateDispMData normalizes mpname even though the
+        # dynamic-field set remains authoritative in styleFileds. Compare every
+        # other editor property here and verify field identity separately below.
+        actual_editor = cls._normalized_editor_layout(target_layout, ignore_mpname=True)
+        expected_editor = cls._normalized_editor_layout(desired_layout, ignore_mpname=True)
         if actual_editor != expected_editor:
             differences = cls._difference_paths(expected_editor, actual_editor)
             raise IntegrationError(
@@ -1076,9 +1082,10 @@ class Service:
         )
 
         # Re-parse both layouts to enforce exact, unique field identities as well as value equality.
-        source_identities = set(cls._components_by_identity(source["layout"]))
-        target_identities = set(cls._components_by_identity(target_layout))
-        if target_identities != source_identities:
+        source_names = {item.get("name") for item in source["layout"]}
+        target_names = {item.get("name") for item in target_layout}
+        if (None in source_names or None in target_names or len(source_names) != len(source["layout"])
+                or len(target_names) != len(target_layout) or target_names != source_names):
             raise IntegrationError("Vendor template component identities changed during clone")
 
     def clone_vendor_template(self, client: Any, data: Any) -> dict[str, Any]:
