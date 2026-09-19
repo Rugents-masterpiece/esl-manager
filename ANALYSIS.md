@@ -94,3 +94,72 @@ Implementačné dôsledky:
 - `getStyleMsgs` poskytuje podstatne širší zoznam než aktuálny MMS sync (62 oproti 4), preto sa nové read-only zobrazenie nemá tváriť ako náhrada existujúceho synchronizovaného inventára bez explicitného zlučovacieho pravidla.
 - Detail šablóny, zoznam obrázkov, obrázkové dáta a preview možno implementovať ako read-through GET API aplikácie bez fyzickej mutácie controlleru.
 - V tejto etape sa nepridajú upload, update displeja ani žiadne DELETE ovládacie prvky.
+
+## Kompletný reverse engineering vendor UI a template editora (ORB-00049)
+
+Používateľ následne výslovne povolil create/update/delete konfiguračných objektov a určil tri zdrojové šablóny. Táto discovery etapa zostala zámerne read-only: fyzické `updateScreen`/`delTagsByMac` ani template mutácie neboli volané. Všetky požiadavky boli autentifikované, serializované a oddelené najmenej 5 sekundami.
+
+### Zachytený živý frontend
+
+Z controlleru sa načítali hlavné menu fragmenty `mms/index`, `mms/meeting`, `mms/tag`, `mms/router`, `mms/chooseStyle`, `mms/getHelpDoc`, tri editory `mms/getDispMs?id=145|147|149` a 37 ich same-origin JS/CSS assetov. Relevantné živé first-party assety:
+
+- `/app/js/DocUtil.js`, SHA-256 `43260b93a5db03c022487a61b2d52848c861843474a982f8808a5d7dbd690c57`
+- `/app/js/RouterUtil.js`, SHA-256 `ae42c141ed36bcb263bbc38b78ed02911ea94485052c704ab15950a88ffaae96`
+- `/app/js/component_v2/component/js/component.js`, SHA-256 `1270f754c9ed60b96e9355b81ef48d7b81fe9fdfb3ad641142556894a63a3806`
+- `/app/js/index.js`, SHA-256 `892f82928731f352490b0f9f9087af7e065e08cd9a49a2f070379bdc5180428e`
+
+Raw capture ostáva iba v dočasnom adresári `/tmp/esl-orb-00049-capture` s módom `0700`; cookies, credentials a Base64 obrázky nie sú v Git ani v tejto dokumentácii.
+
+### Frontendom preukázané backendové route
+
+| Oblasť | Metóda a route | Parametre / body | Zdroj | Riziko a stav |
+|---|---|---|---|---|
+| navigácia | `GET /mms/menu`, `/mms/index`, `/mms/meeting`, `/mms/tag`, `/mms/router`, `/mms/chooseStyle`, `/mms/getHelpDoc` | bez tela | live HTML | read-only, live 200 |
+| inventár tagov | `GET /mms/queryTags` | `currentPage`, `tagMac`, `routerMac`, `startTime`, `endTime`, `templateType` | `RouterUtil.js:95` | read-only, live overené |
+| inventár routerov | `GET /mms/queryRouters` | `currentPage`, `routerId` | `RouterUtil.js:184` | read-only, live overené |
+| meetingy | `GET /mms/queryMeetings`, `GET /mms/queryTagsByMeeting` | stránka, názov alebo `mid`/`mac` | `RouterUtil.js:24,218,245` | read-only; mimo clone workflow |
+| šablóny | `GET /mms/queryStyles` | `currentPage`, `templateType` | `RouterUtil.js:282` | read-only, live overené |
+| typy displejov | `POST /mms/queryStyleAlign` | prázdne JSON telo | `DocUtil.js:1492`, `component.js:505` | read-only; live envelope, 18 typov |
+| editor | `GET /mms/getDispMs?id={id}` | ID šablóny | `DocUtil.js:910` | read-only pre existujúce ID; live 200 |
+| komponenty | `POST /style/getDispMsData?id={id}` | prázdne/form telo | `component.js:727` | read-only; JSON zakódovaný ako string |
+| úplný detail | `GET /style/getStyleData?id={id}` | ID šablóny | live/historické zdroje | read-only; metadata + `dispMs` |
+| obrázky editora | `POST /style/getPhotoName`, `/style/getBgMsg`, `/style/getBgImg` | `stylealignId`, `styleid` alebo `ImgId` | `component.js:108,196,228` | read-only; Base64 musí byť bounded |
+| použitá schéma | `GET /mms/queryUsingColumn` | `tid`, `mappingtype` | `DocUtil.js:103` | read-only |
+| preview návrhu | `POST /style/previewImg?id={id}` | form `orderJson=<JSON>` | `component.js:1315` | generuje preview; nie je dôkazom uloženia |
+| create | `GET /mms/addStyles?id=0&stylealignId={id}` | typ displeja | `DocUtil.js:925` | mutujúci GET; vytvorí default šablónu a serverové ID |
+| názov/typ | `POST /style/updateStyleAlign` | query `styleid`, `stylealign`, `styleName`; prázdne JSON telo | `component.js:383,410,1161` | template update; `0` fail, `1` success, `2` duplicate name |
+| layout | `POST /mms/updateDispMData?id={id}` | form `orderJson=<JSON>` | `component.js:360,1189` | autoritatívny live UI save endpoint; vyžaduje read-back |
+| starý layout | `POST /style/updateDispMData?id={id}` | form `orderJson=<JSON>` | `component.js:1125` | legacy varianta; historicky 200 bez uloženia, nepoužiť |
+| pridať pole | `POST /style/addColumnAndGood` | query `columnName`, `mappingText`, `mappingtype`, `styleid` | `component.js:334` | template update; vytvára serverový component ID |
+| zmazať pole | `POST /style/delDismp` | JSON scalar component ID | `component.js:841` | deštruktívne iba pre jeden komponent |
+| zmazať šablónu | `GET /style/deleteStyles?styleid={id}` | ID šablóny | `DocUtil.js:975` | deštruktívny GET; úspech je envelope `resultCode=10` |
+| pozadie | `POST /style/removeBackground` | `mappingtype`, `styleid` | `component.js:243` | mutácia šablóny |
+| upload obrázka | `POST /style/uploadPhoto` | multipart form: `name`, `width`, `height`, `photo`, voliteľne `redphoto` | `component.js:461,479` | upload; nie JSON/form-urlencoded |
+| upload fontu | `POST /mms/uploadFont` | multipart + query `filePath`, `fontName` | `component.js:30` | systémová mutácia, mimo clone workflow |
+| meeting väzba | `POST /mms/selectStyleById` | form `mid`, `styleid` | `RouterUtil.js:362` | mutácia meetingu, mimo rozsahu |
+| ostatné UI mutácie | `POST /mms/saveColumnContent`, `/mms/delMeeting`, `/mms/deleteTag`, `/mms/deleteAllTag`, `/mms/deleteRouter`; `POST /router/updateRouterDescription`, `/router/updateTagRegisterEN`; default GET `/associate/tagWakePeriod` | podľa `DocUtil.js` | `DocUtil.js:1249-1550` | nesúvisia s klonovaním; nevolať |
+
+Naďalej platia zdokumentované `/associate` route: `getTagsMsg`, `getRoutersMsg`, `getStyleMsgs`, `getStyleMsgById`, `getPhotos`, `getPhotoDataByName`, `updateScreen`, `uploadPhoto`, `delPhoto`, `delTagsByMac`. Aktívny MMS inventár zostáva autoritatívny. Fyzické tag mutácie sú oddelené od template CRUD a nie sú súčasťou vytvorenia klonov.
+
+### Presné zdrojové snapshoty
+
+| ID | Názov | Rozmer | style align / screen type | mappingtype | Komponenty | Texty už bold / spolu | Layout SHA-256 | Preview SHA-256 |
+|---:|---|---:|---:|---:|---:|---:|---|---|
+| 145 | `S21BasePriceTag_V1` | 250x122 | 9 / 2 | 291 | 6 text | 2 / 6 | `c73b93bc475d556b1f0085c454ecc6cd9f01f44d59b4a735bd7d636c2eca7b2f` | `82d9f6b5d825f23748508ddc640c3c10ce684f25f580aa355a97540d21a47284` |
+| 147 | `SF21BasePriceTag_V1` | 250x132 | 8 / 1 | 502 | 6 text | 2 / 6 | `afe9c492de7acbbd4395113bac1255fb99fa6df9321e5bf99a78c045cfab5c99` | `76691154e487a3ce5dd291ea86cdfc45d94c8b61f27c84e8e61e4cb3489614cb` |
+| 149 | `Default Template149` | 296x128 | 2 / 2 | 620 | 6 text | 4 / 6 | `9b7581218f7975135e704be9a5fb3541e2d73009d0918d28eaf0dab175e4fc3e` | `358af8b167d1bb7fd0d2479a3009a2e72c2d8dff3b996892093e91c33e965366` |
+
+Všetkých 18 komponentov troch zdrojov má `type="text"`. Editor zapisuje tučné písmo ako `style["font-weight"] = "700"`; read-back `/style/getStyleData` ho reprezentuje ako `fontBold="bold"`. Transformácia klonu preto mení iba `font-weight` na `700` pre každý textový komponent. Rozmery, pozícia, farby, text, prefix/suffix, dátové mapovanie a netextové polia sa nemenia.
+
+### Bezpečný clone kontrakt
+
+1. Tesne pred create načítať a hashovať katalóg, metadata, `getDispMsData`, `getStyleData` a preview zdroja.
+2. Overiť, že cieľový názov ešte neexistuje. Predvolené rozlíšiteľné názvy budú `S21BasePriceTag_V1_BOLD`, `SF21BasePriceTag_V1_BOLD` a `Default Template149_BOLD`.
+3. `GET /mms/addStyles?id=0&stylealignId={9|8|2}` vykonať presne raz. Aj keď ide o GET, považovať ho za create. Nové ID identifikovať porovnaním katalógu a z HTML odpovede; nikdy ho nehádzať ani opakovane nevolať pri nejasnom statuse.
+4. Nová default šablóna má vlastný `mappingtype` a serverové component IDs. Zdrojové component IDs sa nesmú poslať do cieľovej šablóny, lebo by mohli prepísať alebo presunúť zdroj.
+5. Pre každé chýbajúce dynamické pole zavolať `addColumnAndGood` najviac raz, potom znovu načítať cieľ a spárovať nové serverové IDs podľa stabilných field identít. Až potom zostaviť cieľový `orderJson` so zachovaným layoutom a `font-weight=700`.
+6. Aktualizovať jedinečný názov cez `updateStyleAlign`, uložiť layout cez autoritatívny `/mms/updateDispMData`, potom vykonať detail/layout/preview read-back. HTTP status ani preview bez detailu nie sú dôkaz uloženia.
+7. Zdroj musí mať po každom klone rovnaký normalizovaný layout hash a metadata. Pri nejasnom výsledku mutáciu neopakovať; najprv znovu načítať katalóg a presný objekt.
+8. Rollback smie použiť `GET /style/deleteStyles?styleid={new_id}` iba pre ID vytvorené týmto workflow, po fresh read-backu identity. Zdrojové ID 145/147/149 sa nikdy nemažú ani neupravujú.
+
+Live katalóg mal počas discovery 62 položiek a maximálne ID 153. Existujú aj staršie testovacie objekty 150 a 151; nie sú vytvorené touto úlohou a preto sa automaticky nemažú. Zachytený historický `addStyles` objekt 151 potvrdzuje, že create route pridelila nový ID, nový `mappingtype` a jeden default textový komponent. Žiadny fyzický tag nebol počas discovery zmenený.
