@@ -49,7 +49,7 @@ class FrontendSourceTests(unittest.TestCase):
             "app-status", "safety-banner", "mobile-nav-toggle", "view-overview",
             "view-tags", "view-products", "view-templates", "view-routers", "view-jobs",
             "view-audit", "product-modal", "product-form", "tag-search", "tag-status",
-            "tag-battery", "tag-router", "selected-count",
+            "tag-battery", "tag-signal", "tag-router", "selected-count",
         ):
             self.assertIn(marker, parser.ids)
         self.assertEqual(parser.scripts, ["/static/app.js"])
@@ -81,6 +81,13 @@ class FrontendSourceTests(unittest.TestCase):
             self.assertIn(method, script)
         self.assertNotIn("/api/dispatch/live", script)
         self.assertNotIn("/api/tags/", script)
+
+    def test_operational_metrics_are_rendered_from_live_values(self):
+        script = (STATIC / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('byId("tag-signal").value', script)
+        self.assertIn('progressFill.style.width = `${successRate}%`', script)
+        self.assertIn('router.version || router.firmware_version', script)
 
 
 class StaticServerTests(unittest.TestCase):

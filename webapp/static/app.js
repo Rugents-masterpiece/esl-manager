@@ -178,6 +178,10 @@ async function loadTags() {
     const battery = byId("tag-battery").value;
     if (battery === "low") items = items.filter((tag) => Number(tag.battery) <= 20);
     if (battery === "ok") items = items.filter((tag) => Number(tag.battery) > 20);
+    const signal = byId("tag-signal").value;
+    if (signal === "strong") items = items.filter((tag) => Number(tag.rssi) >= -65);
+    if (signal === "medium") items = items.filter((tag) => Number(tag.rssi) >= -80 && Number(tag.rssi) < -65);
+    if (signal === "weak") items = items.filter((tag) => Number(tag.rssi) < -80);
     state.tags = items;
     populateRouterFilter();
     renderTags(items);
@@ -385,7 +389,7 @@ async function loadRouters() {
     state.routers = routersResult.items;
     const cards = state.routers.map((router) => {
       const attached = tagsResult.items.filter((tag) => tag.router_id === router.id).length;
-      return element("article", { className: "card" }, [element("p", { className: "eyebrow", text: router.id }), element("h2", { text: router.name }), status(router.status), definitionList([["IP adresa", router.address], ["Heartbeat", formatDate(router.last_seen_at)], ["Frekvencia", "2,4 GHz"], ["Verzia", "spravuje vendor"], ["Počet cenoviek", attached]])]);
+      return element("article", { className: "card" }, [element("p", { className: "eyebrow", text: router.id }), element("h2", { text: router.name }), status(router.status), definitionList([["IP adresa", router.address], ["Heartbeat", formatDate(router.last_seen_at)], ["Frekvencia", "2,4 GHz"], ["Verzia", router.version || router.firmware_version || "Neznáma"], ["Počet cenoviek", attached]])]);
     });
     byId("routers-grid").replaceChildren(...(cards.length ? cards : [emptyMessage("Nie sú dostupné žiadne stanice.")]));
     setState("routers-state", "");
@@ -404,6 +408,8 @@ async function loadJobs() {
 
 function renderJob(job) {
   const successRate = job.total_items ? Math.round((Number(job.succeeded_items) / Number(job.total_items)) * 100) : 0;
+  const progressFill = element("span");
+  progressFill.style.width = `${successRate}%`;
   const actions = element("div", { className: "job-actions" });
   if (["queued", "partial", "failed"].includes(job.status) && job.items.some((item) => item.status === "queued")) {
     actions.append(actionButton("Simulovať úspech", "simulate", job.id), actionButton("Simulovať chybu", "simulate-failure", job.id));
@@ -423,7 +429,7 @@ function renderJob(job) {
   return element("article", { className: "job" }, [
     element("div", { className: "job-header" }, [element("div", {}, [element("p", { className: "eyebrow", text: formatDate(job.requested_at) }), element("h2", { className: "mono", text: job.id }), status(job.status)]), actions]),
     element("div", { className: "job-summary" }, [["Položky", job.total_items], ["Úspešné", job.succeeded_items], ["Chybné", job.failed_items], ["Úspešnosť", `${successRate} %`]].map(([label, value]) => element("div", { className: "job-metric" }, [element("span", { text: label }), element("strong", { text: value })]))),
-    element("div", { className: "progress", attrs: { role: "progressbar", "aria-label": `Úspešnosť úlohy ${job.id}`, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(successRate) } }, [element("span")]),
+    element("div", { className: "progress", attrs: { role: "progressbar", "aria-label": `Úspešnosť úlohy ${job.id}`, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(successRate) } }, [progressFill]),
     element("div", { className: "job-items" }, [itemTable]),
   ]);
 }
