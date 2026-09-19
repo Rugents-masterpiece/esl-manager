@@ -359,6 +359,26 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result["id"], "200")
         self.assertEqual(counts, {"field": 2, "rename": 1, "save": 1})
 
+    def test_clone_accepts_vendor_numeric_bold_and_reordered_editor_readback(self):
+        client = self._clone_client()
+        original_layout = client.get_style_layout
+
+        def normalized_layout(style_id):
+            result = original_layout(style_id)
+            if style_id == 200 and any(call[0] == "save" for call in client.calls):
+                result.reverse()
+                for component in result:
+                    style = component.get("style", {})
+                    if style.get("font-weight") == "700":
+                        style["font-weight"] = 700
+            return result
+
+        client.get_style_layout = normalized_layout
+        result = self.service.clone_vendor_template(client, {
+            "source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
+        })
+        self.assertEqual(result["id"], "200")
+
     def test_clone_never_adopts_or_mutates_delta_without_a_create_response_id(self):
         client = self._clone_client()
 

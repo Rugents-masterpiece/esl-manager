@@ -801,6 +801,35 @@ class Service:
         return hashlib.sha256(encoded).hexdigest()
 
     @classmethod
+    def _normalized_editor_layout(cls, layout: Any) -> list[dict[str, Any]]:
+        cls._components_by_identity(layout)
+        normalized = copy.deepcopy(layout)
+        for component in normalized:
+            style = component.get("style")
+            if isinstance(style, dict) and "font-weight" in style:
+                value = style["font-weight"]
+                if (not isinstance(value, bool) and isinstance(value, (int, str))
+                        and re.fullmatch(r"\d+", str(value))):
+                    style["font-weight"] = int(value)
+        return sorted(normalized, key=lambda item: str(item.get("name", "")))
+
+    @classmethod
+    def _source_snapshot_hash(cls, snapshot: dict[str, Any]) -> str:
+        normalized = copy.deepcopy(snapshot)
+        normalized["layout"] = cls._normalized_editor_layout(normalized["layout"])
+        detail_components = normalized.get("detail", {}).get("dispMs")
+        if isinstance(detail_components, list):
+            normalized["detail"]["dispMs"] = sorted(
+                detail_components, key=lambda item: str(item.get("name", ""))
+            )
+        for record_name in ("metadata", "detail"):
+            record = normalized.get(record_name, {})
+            for field_name in ("styleFileds", "styleFields"):
+                if isinstance(record.get(field_name), list):
+                    record[field_name] = sorted(record[field_name])
+        return cls._clone_hash(normalized)
+
+    @classmethod
     def _source_snapshot(cls, client: Any, source_id: int,
                          catalog_item: dict[str, Any]) -> tuple[dict[str, Any], str]:
         metadata = client.get_style_detail(source_id)
@@ -822,7 +851,7 @@ class Service:
             "preview_sha256": hashlib.sha256(preview[0]).hexdigest(),
             "preview_type": preview[1],
         }
-        return snapshot, cls._clone_hash(snapshot)
+        return snapshot, cls._source_snapshot_hash(snapshot)
 
     @classmethod
     def _bold_target_layout(cls, source_layout: list[dict[str, Any]],
@@ -947,7 +976,8 @@ class Service:
                 or target_metadata.get("id") != created_id
                 or str(target_detail.get("name", "")).strip() != target_name
                 or str(target_metadata.get("name", "")).strip() != target_name
-                or target_layout != desired_layout):
+                or cls._normalized_editor_layout(target_layout)
+                != cls._normalized_editor_layout(desired_layout)):
             raise IntegrationError("Vendor template save could not be verified")
 
         # The controller overloads `type`: /style/getStyleData uses it for the
@@ -1011,8 +1041,8 @@ class Service:
         )
 
         # Re-parse both layouts to enforce exact, unique field identities as well as value equality.
-        source_identities = list(cls._components_by_identity(source["layout"]))
-        target_identities = list(cls._components_by_identity(target_layout))
+        source_identities = set(cls._components_by_identity(source["layout"]))
+        target_identities = set(cls._components_by_identity(target_layout))
         if target_identities != source_identities:
             raise IntegrationError("Vendor template component identities changed during clone")
 
@@ -1133,7 +1163,7 @@ class Service:
                 "source_id": str(source_id),
                 "layout_sha256": self._clone_hash(verified_layout),
                 "preview_sha256": hashlib.sha256(verified_preview[0]).hexdigest(),
-                "source_sha256": self._clone_hash(final_source),
+                "source_sha256": self._source_snapshot_hash(final_source),
             }
             with self.storage.connection() as connection:
                 self._audit(connection, "vendor.template.cloned", "template", str(created_id), {
