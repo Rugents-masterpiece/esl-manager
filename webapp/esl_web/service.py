@@ -775,8 +775,9 @@ class Service:
         raise IntegrationError("Vendor style component has no stable field identity")
 
     @classmethod
-    def _components_by_identity(cls, layout: Any) -> dict[str, dict[str, Any]]:
-        if (not isinstance(layout, list) or not layout or len(layout) > 500
+    def _components_by_identity(cls, layout: Any, *,
+                                allow_empty: bool = False) -> dict[str, dict[str, Any]]:
+        if (not isinstance(layout, list) or (not layout and not allow_empty) or len(layout) > 500
                 or any(not isinstance(item, dict) for item in layout)):
             raise IntegrationError("Vendor style layout returned invalid data")
         result: dict[str, dict[str, Any]] = {}
@@ -994,8 +995,15 @@ class Service:
         target_field_key = next(
             (key for key in ("styleFileds", "styleFields") if key in target_metadata), None
         )
-        if (source_field_key is None or target_field_key is None
-                or target_metadata[target_field_key] != source["metadata"][source_field_key]):
+        if source_field_key is None or target_field_key is None:
+            raise IntegrationError("Vendor template style fields changed during clone")
+        source_fields = source["metadata"][source_field_key]
+        target_fields = target_metadata[target_field_key]
+        if (not isinstance(source_fields, list) or not isinstance(target_fields, list)
+                or any(not isinstance(item, str) or not item for item in source_fields + target_fields)
+                or len(set(source_fields)) != len(source_fields)
+                or len(set(target_fields)) != len(target_fields)
+                or set(target_fields) != set(source_fields)):
             raise IntegrationError("Vendor template style fields changed during clone")
         cls._verify_detail_components(
             source["detail"].get("dispMs"), source["layout"],
@@ -1060,7 +1068,7 @@ class Service:
             target_detail = client.get_style_data(created_id)
             target_layout = client.get_style_layout(created_id)
             source_components = self._components_by_identity(source_snapshot["layout"])
-            target_components = self._components_by_identity(target_layout)
+            target_components = self._components_by_identity(target_layout, allow_empty=True)
             mapping_type = self._vendor_integer_value(
                 target_detail.get("mappingtype"), "mappingtype", minimum=1
             )

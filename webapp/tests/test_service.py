@@ -301,6 +301,18 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(event["entity_id"], "200")
         self.assertEqual(event["details"]["source_id"], 145)
 
+    def test_clone_populates_an_empty_server_created_template(self):
+        client = self._clone_client()
+        client.target_layout = []
+        result = self.service.clone_vendor_template(client, {
+            "source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
+        })
+        self.assertEqual(result["id"], "200")
+        self.assertEqual([call[-1] for call in client.calls if call[0] == "field"],
+                         ["name", "price", "logo"])
+        saved = next(call[2] for call in client.calls if call[0] == "save")
+        self.assertEqual([item["mpname"] for item in saved], ["name", "price", "logo"])
+
     def test_clone_rejects_unknown_source_and_duplicate_name_before_mutation(self):
         client = self._clone_client()
         with self.assertRaises(ValidationError):
