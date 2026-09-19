@@ -1,0 +1,1522 @@
+
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+    <base href="http://192.168.16.251:80/esls_new/">
+    <link href="assets/plugins/font-awesome/css/font-awesome.min.css"
+          rel="stylesheet" type="text/css"/>
+    <link href="assets/plugins/bootstrap/css/bootstrap.min.css"
+          rel="stylesheet" type="text/css"/>
+    <link href="assets/plugins/uniform/css/uniform.default.css"
+          rel="stylesheet" type="text/css"/>
+    <link href="assets/plugins/gritter/css/jquery.gritter.css"
+          rel="stylesheet" type="text/css"/>
+    <link
+            href="assets/plugins/bootstrap-daterangepicker/daterangepicker-bs3.css"
+            rel="stylesheet" type="text/css"/>
+    <link href="assets/css/style-metronic.css" rel="stylesheet"
+          type="text/css"/>
+    <link href="assets/css/style.css" rel="stylesheet" type="text/css"/>
+    <link href="assets/css/style-responsive.css" rel="stylesheet"
+          type="text/css"/>
+    <link href="assets/css/plugins.css" rel="stylesheet" type="text/css"/>
+    <link href="assets/css/pages/tasks.css" rel="stylesheet" type="text/css"/>
+    <link href="assets/css/themes/default.css" rel="stylesheet"
+          type="text/css" id="style_color"/>
+    <link href="assets/css/custom.css" rel="stylesheet" type="text/css"/>
+    <link rel="shortcut icon" href="favicon.ico"/>
+    <link
+            href="app/js/component_v2/component/colorpicker/css/colorpicker.css"
+            rel="stylesheet" type="text/css"/>
+    <style type="text/css">
+        .editpanel {
+            border: 2px solid #000000;
+            width: 0px;
+            height: 0px;
+            position: relative;
+            overflow: hidden;
+            -moz-user-select: none;
+            -webkit-user-select: none;
+            -ms-user-select: none;
+            -khtml-user-select: none;
+            user-select: none;
+            display: inline-block;
+        }
+
+        .moveNode {
+            width: 100px;
+            height: 100px;
+            border: 1px solid #808080;
+            position: absolute;
+            cursor: move;
+            left: 3px;
+            top: 0px;
+            white-space: normal;
+        }
+
+        .scaleNode {
+            width: 100%;
+            height: 10px;
+            background-color: #ffffff;
+            position: absolute;
+            right: 0px;
+            bottom: 0px;
+            cursor: se-resize;
+            filter: alpha(opacity=0);
+            -moz-opacity: 0;
+            -khtml-opacity: 0;
+            opacity: 0;
+        }
+
+        .pop-add-column {
+            position: fixed;
+            z-index: 19;
+            top: 25%;
+            left: 15%;
+            width: 500px;
+            height: 175px;
+            border: 1px solid dimgray;
+            box-shadow: 1px 2px 5px 0px gray;
+            display: none;
+            background: white;
+        }
+
+        .pop-top {
+            width: 498px;
+            height: 30px;
+            line-height: 28px;
+            background: #4b8df8;
+            color: white;
+            border-bottom: 1px solid dimgray;
+        }
+
+        .add-column-content-input-div {
+            padding: 3px;
+        }
+
+        .insert-ev {
+            margin: 10px;
+            width: 120px;
+            height: 42px;
+            color: white;
+            background: #4b8df8;
+            border: 1px solid #4b8df8;
+            border-radius: 6px !important;
+        }
+
+        .e-menu {
+            border: 1px solid gray;
+            width: 100px;
+            height: 24px;
+            line-height: 24px;
+            position: fixed;
+            z-index: 99;
+            font-size: 14px;
+            font-weight: bold;
+            background: white;
+            color: dimgray;
+            box-shadow: 1px 2px 5px 0px gray;
+            font-weight: bold;
+            background: white;
+            background: white;
+        }
+
+        .addFont {
+            background: white;
+            position: fixed;
+            z-index: 999;
+            top: 20%;
+            left: 40%;
+            border: 1px solid gray;
+            padding: 20px;
+            border-radius: 3px !important;
+            box-shadow: 1px 1px 1px 1px darkgray;
+            display: none;
+        }
+
+        .button-group {
+            margin: auto;
+            text-align: center;
+            margin: 5px;
+            padding: 5px;
+        }
+
+        .input-group {
+            margin: 5px;
+            padding: 5px;
+        }
+
+        .zzk-div {
+            position: fixed;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.2);
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            display: none;
+        }
+    </style>
+</head>
+<body class="page-header-fixed page-content iframe-content">
+<div class="page-content-wrapper">
+    <div class="iframe-content">
+        <div id="main-content">
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="form-group">
+                        <div class="col-md-8">
+                            <div class="portlet box blue"
+                                 style="background: none !important;">
+                                <div class="portlet-title">
+                                    <div class="caption">
+                                        <i class="fa fa-cogs"></i>Default Template151
+                                        (296x128) <input id="sytleId"
+                                                                              type="hidden" value="151"/> <input
+                                            id="sytleName"
+                                            type="hidden" value="Default Template151"/> <input
+                                            id="sytleWidth" type="hidden" value="296"/> <input
+                                            id="sytleHeight" type="hidden" value="128"/><input
+                                            id="mappingtype" type="hidden" value="422"/><input
+                                            id="stylealign" type="hidden" value="2"/><input
+                                            id="backgroundId" type="hidden" value="0"/><input
+                                            id="screenType" type="hidden" value="2"/>
+                                    </div>
+                                    <div class="actions">
+                                        <a href="javascript:;" class="btn blue "
+                                           onclick="addToServerNew('151')"> <i
+                                                class="fa fa-save"></i>
+                                            <div class="textMsg">保存模板</div>
+                                        </a> <a id="review" href="javascript:;" class="btn blue "
+                                                onclick="showPreview('151')"> <i
+                                            class="fa fa-save"></i>
+                                        <div class="textMsg">预览</div>
+                                    </a>
+                                    </div>
+                                </div>
+
+                                <div id="addColumnPop" class="pop-add-column ">
+                                    <div class="pop-top ">
+                                        &nbsp;
+                                        <div class="textMsg"
+                                             style="margin-left: 5px; float: left; font-weight: 600;">添加字段</div>
+                                        <div style="font-size: 18px; float: right;">
+                                            <a style="color: white" onclick="closePop()">x</a>&nbsp;&nbsp;
+                                        </div>
+                                    </div>
+                                    <div style="padding: 15px; padding-left: 20%;">
+                                        <div class="add-column-content-input-div">
+                                            <div class="textMsg">请输入字段名：</div>
+                                            <input style="width: 280px" id="dmappingText"
+                                                   name="mappingText" placeholder="例如：产地、姓名、公司名等（必填）">
+                                        </div>
+                                        <div style="display: none"
+                                             class="add-column-content-input-div ">
+                                            <div class="textMsg">预览内容：</div>
+                                            <input id="dcolumnName" value="">
+                                        </div>
+                                        <div style="display: none"
+                                             class="add-column-content-input-div ">
+                                            <div class="textMsg">字段类型：</div>
+                                            <select id="mappingTextContent" name="columnName"
+                                                    style="width: 100px; height: 24px; margin-left: -5px;">
+                                                <option class="textMsg">文本</option>
+                                                <option class="textMsg">图片</option>
+                                                <option class="textMsg">二维码</option>
+                                                <option class="textMsg">条形码</option>
+                                            </select> <input style="display: none" id="dmappingType"
+                                                             name="mappingtype">
+                                        </div>
+                                        <div style="margin-left: 30%; padding: 5px;">
+                                            <button onclick="addColumnAndGood()"
+                                                    style="padding-left: 15px; padding-right: 15px;"
+                                                    class="textMsg">确定</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+
+                                <!-- 添加背景弹框 -->
+                                <div id="addBgPop" class="pop-add-column">
+                                    <div class="pop-top ">
+                                        &nbsp;
+                                        <div class="textMsg"
+                                             style="margin-left: 5px; float: left; font-weight: 600;">上传背景</div>
+                                        <div style="font-size: 18px; float: right;">
+                                            <a style="color: white" onclick="hiddenBgPop()">x</a>&nbsp;&nbsp;
+                                        </div>
+                                    </div>
+                                    <form id="upload_Photo" action=""
+                                          enctype="multipart/form-data">
+                                        <table style="margin-left: 50px;">
+                                            <tbody>
+                                            <tr style="height: 50px;">
+                                                <td class="textMsg">背景名称：</td>
+                                                <td><input id="ImgName" type="text" name="name"><font
+                                                        color="gray" class="textMsg">*暂不支持中文名称</font></td>
+                                            </tr>
+                                            <tr style="height: 50px; display: none">
+                                                <td class="textMsg">宽度：</td>
+                                                <td><input id="ImgWidth" type="text" name="width"></td>
+                                            </tr>
+                                            <tr style="height: 50px; display: none">
+                                                <td class="textMsg">高度：</td>
+                                                <td><input id="ImgHeight" type="text" name="height"></td>
+                                            </tr>
+                                            <tr>
+                                                <td class="textMsg">上传背景：</td>
+                                                <td><input id="ImgBlack" type="file" name="photo"></td>
+                                            </tr>
+                                            <tr style="height: 50px; display: none">
+                                                <td class="textMsg">红色图片：</td>
+                                                <td><input id="ImgRed" type="file" name="redphoto"></td>
+                                            </tr>
+                                            </tbody>
+                                        </table>
+                                    </form>
+                                    <div style="margin-left: 30%; padding: 5px;">
+                                        <button onclick="uploadBgImg()" style="padding-left: 15px; padding-right: 15px;"
+                                                class="textMsg">确定</button>
+                                    </div>
+                                </div>
+
+
+                                <!-- 添加图片弹框 -->
+                                <div id="addImgPop" class="pop-add-column"
+                                     style="height: 270px;">
+                                    <div class="pop-top ">
+                                        &nbsp;
+                                        <div class="textMsg"
+                                             style="margin-left: 5px; float: left; font-weight: 600;">上传图片</div>
+                                        <div style="font-size: 18px; float: right;">
+                                            <a style="color: white" onclick="hiddenImgPop()">x</a>&nbsp;&nbsp;
+                                        </div>
+                                    </div>
+                                    <form id="upload_PhotoImg" action=""
+                                          enctype="multipart/form-data">
+                                        <table style="margin-left: 50px;">
+                                            <tbody>
+                                            <tr style="height: 50px;">
+                                                <td class="textMsg">图片名称：</td>
+                                                <td><input type="text" name="name"><font
+                                                        color="gray" class="textMsg">*暂不支持中文名称</font></td>
+                                            </tr>
+                                            <tr style="height: 50px;">
+                                                <td class="textMsg">宽度：</td>
+                                                <td><input type="text" name="width"></td>
+                                            </tr>
+                                            <tr style="height: 50px;">
+                                                <td class="textMsg">高度：</td>
+                                                <td><input type="text" name="height"></td>
+                                            </tr>
+                                            <tr>
+                                                <td class="textMsg">上传图片：</td>
+                                                <td><input type="file" name="photo"></td>
+                                            </tr>
+                                            <tr style="height: 50px; display: none">
+                                                <td class="textMsg">红色图片：</td>
+                                                <td><input type="file" name="redphoto"></td>
+                                            </tr>
+                                            </tbody>
+                                        </table>
+                                    </form>
+                                    <div style="margin-left: 30%; padding: 5px;">
+                                        <button onclick="uploadImg()"
+                                                style="padding-left: 15px; padding-right: 15px;"
+                                                class="textMsg">确定</button>
+                                    </div>
+                                </div>
+
+                                <div style="width: 180px;">
+                                    <button class="insert-ev textMsg" style="float: left;"
+                                            onclick="blockPop('文本');">文本
+                                    </button>
+                                    <button class="insert-ev textMsg" style="float: left;"
+                                            onclick="blockPop('图片');">图片
+                                    </button>
+                                    <button class="insert-ev textMsg" style="float: left;"
+                                            onclick="blockPop('二维码');">二维码
+                                    </button>
+                                    <button class="insert-ev textMsg" style="float: left;"
+                                            onclick="blockPop('条形码');">条形码
+                                    </button>
+                                    <!-- <button class="insert-ev" style="float: left;" onclick="blockPop('background');">背景</button> -->
+                                </div>
+                                <div class="background"
+                                     style="text-align: center; margin: 15px; magrin-right: 10%;">
+                                    <div class="editpanel" id="editpanel">
+                                        <div class="moveNode">
+                                            <div class="scaleNode"></div>
+                                        </div>
+                                        <div class="portlet-body moveNode">
+                                            <div class="scaleNode"></div>
+                                        </div>
+                                        <div class="moveNode">
+                                            <div class="scaleNode"></div>
+                                        </div>
+                                    </div>
+                                    <div style="height: 10px"></div>
+                                    <table
+                                            style="display: none; width: 500px; float: right; margin-top: 15px;"
+                                            id="table-header"
+                                            class="table table-bordered table-condensed">
+                                        <thead>
+                                        <tr>
+                                            <th class="textMsg">勾选</th>
+                                            <th class="textMsg" style="display: none">项目名字</th>
+                                            <th class="textMsg">字段名</th>
+                                            <th class="textMsg">预览字段</th>
+                                            <th class="textMsg" style="display: none">数据源表名</th>
+                                            <th class="textMsg" style="display: none">数据源列名</th>
+                                            <th class="textMsg" style="display: none">字段类型</th>
+                                            <th class="textMsg">操作</th>
+                                        </tr>
+                                        </thead>
+                                        <tbody id="grid-tbody">
+                                        <tr>
+                                            <td><input id="state" type="checkbox"
+                                                       checked="checked"></td>
+                                            <td style="display: none">test</td>
+                                            <td>test</td>
+                                            <td style="display: none">test</td>
+                                            <td style="display: none">test</td>
+                                            <td style="display: none">test</td>
+                                            <td>
+                                                <button class="textMsg">删除</button>
+                                            </td>
+                                        </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6"
+                                 style="border: 1px solid #4b8df8; padding: 0 !important;">
+                                <div class="portlet box blue">
+                                    <div class="portlet-title">
+                                        <div class="caption col-md-6" id="">
+                                            <i class="fa fa-cogs textMsg"></i>
+                                            <div class="textMsg">模板属性</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-12">
+                                        <div class="form-group">
+                                            <label class="control-label col-md-4 textMsg"
+                                                   style="line-height: 50px;">模板名称</label>
+                                            <div class="col-md-7">
+                                                <input id="sytleNameAdd" value="Default Template151"
+                                                       class="form-control"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-12" style="height: 33px">
+                                        <div class="form-group">
+                                            <label class="control-label col-md-4 textMsg"
+                                                   style="line-height: 30px;">屏幕类型</label>
+                                            <div class="col-md-7">
+                                                <select id="stylealignId" value="2"
+                                                        class="form-control" onchange="saveStyle(151)">
+
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="form-group">
+                                            <label class="control-label col-md-4 textMsg"
+                                                   style="line-height: 50px;">宽度</label>
+                                            <div class="col-md-7">
+                                                <input id="WidthAdd" value="296"
+                                                       disabled="disabled" class="form-control"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="form-group">
+                                            <label class="control-label col-md-4 textMsg"
+                                                   style="line-height: 50px;">高度</label>
+                                            <div class="col-md-7">
+                                                <input id="HeightAdd" value="128"
+                                                       disabled="disabled" class="form-control"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-12" style="height: 40px">
+                                        <div class="form-group">
+                                            <label class="control-label col-md-4 textMsg"
+                                                   style="line-height: 50px;">背景</label>
+                                            <div class="col-md-7">
+                                                <select id="backgroundImg" value=""
+                                                        onchange="getPhotoByte(value)" class="form-control">
+                                                    <option value="0" class="textMsg">无</option>
+                                                    <option value="0" class="textMsg">黑色</option>
+                                                    <option value="0" class="textMsg">红色</option>
+                                                </select>
+                                                
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-12">
+                                        <button class="insert-ev textMsg" onclick="blockBgPop();"
+                                                style="margin-left: 55px; margin-top: 0px;">上传背景
+                                        </button>
+                                        <button class="insert-ev textMsg" onclick="blockImgPop();"
+                                                style="margin-top: 0px;">上传图片
+                                        </button>
+                                    </div>
+                                    
+                                </div>
+                            </div>
+
+
+                            <!-- 生成接口代码字段 -->
+                            <div class="col-md-6"
+                                 style="border: 1px solid #4b8df8; padding: 0 !important;">
+                                <div class="portlet box blue">
+                                    <div class="portlet-title">
+                                        <div class="caption col-md-6" id="">
+                                            <i class="fa fa-cogs "></i>
+                                            <div class="textMsg">接口代码</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-12" style="height: 239px;">
+                                        <div class="form-group ">
+                                            <div class="textMsg">地址：</div>
+                                            <input id="interfaceAddr" disabled="disabled"
+                                                   style="width: 370px; height: 30px" class="form-control">
+                                            <div class="col-md-7 ">
+                                                <div class="textMsg">代码：</div>
+                                                <textarea id="interfaceCode"
+                                                          style="width: 370px; height: 100px;" class="form-control">
+												</textarea>
+                                            </div>
+                                        </div>
+                                        
+                                    </div>
+                                </div>
+
+
+                            </div>
+                        </div>
+                        <div class="col-md-4" id="preview_model"
+                             style="display: none; position: fixed; z-index: 19; top: 15%; left: 15%">
+                            <div class="portlet box blue">
+                                <div class="portlet-title">
+                                    <div class="caption ">
+                                        <i class="fa fa-home"></i>
+                                        <div class="textMsg" style="width: 100px">预览</div>
+                                    </div>
+                                    <div class="actions">
+                                        <a href="javascript:;" class="btn blue "
+                                           onclick="hidePreview()"> <i class="fa fa-eye-slash"></i>
+                                            <div class="textMsg">隐藏</div>
+                                        </a>
+                                    </div>
+                                </div>
+                                <div class="review_model"
+                                     style="width: 100%; border: 1px solid #fe1111; background: #fff;">
+                                    <div>
+                                        <img id="preview_img" class="img-thumbnail center-block"/>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div id="styleSetPanel" class="portlet box blue">
+                                <div class="portlet-title">
+                                    <div class="caption textMsg" id="obj-title">
+                                        <i class="fa fa-cogs"></i>属性
+                                    </div>
+                                </div>
+                                <div class="background">
+                                    <div class="row">
+                                        <form class="form-horizontal form-bordered form-row-strippe"
+                                              action="" data-toggle="validator"
+                                              enctype="multipart/form-data">
+
+                                            <div class="col-md-12">
+                                                <label class="control-label col-md-12 textMsg"
+                                                       style="font-weight: bold; padding: 0px; margin: 0px; text-align: left;">基本设置</label>
+                                                <div class="col-md-12">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-2">x</label>
+                                                        <div class="col-md-4">
+                                                            <input id="show_left" data-t="styleinput"
+                                                                   data-flag="left" value="0" class="form-control"/>
+                                                        </div>
+                                                        <label class="control-label col-md-2">y</label>
+                                                        <div class="col-md-4">
+                                                            <input id="show_top" data-t="styleinput" data-flag="top"
+                                                                   value="0" class="form-control"/>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="col-md-12"
+                                                     style="border-bottom: 1px solid #4b8df8">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-2">width</label>
+                                                        <div class="col-md-4">
+                                                            <input id="show_width" data-t="styleinput"
+                                                                   data-flag="width" value="100" class="form-control"/>
+                                                        </div>
+                                                        <label class="control-label col-md-2">height</label>
+                                                        <div class="col-md-4">
+                                                            <input id="show_height" data-t="styleinput"
+                                                                   data-flag="height" value="20" class="form-control"/>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div id="selectInputTextData" class="col-md-12">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-3 textMsg">文本</label>
+                                                        <div class="col-md-9">
+                                                            <input id="divtext" value="文本预览" onchange="changeText()"
+                                                                   class="form-control"/>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div id="selectImgData" class="col-md-12"
+                                                 style="display: none">
+                                                <div class="col-md-12">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-3 textMsg">选择图片</label>
+                                                        <div class="col-md-9">
+                                                            <select id="selectImgName"
+                                                                    onchange="getPhotoDataByte(value)"
+                                                                    class="form-control">
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+
+                                            <div id="moreProperties" class="col-md-12">
+                                                <label class="control-label col-md-12 textMsg"
+                                                       style="font-weight: bold; padding: 0px; margin: 0px; text-align: left;">更多设置</label>
+
+
+                                                <div class="col-md-12">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-2 textMsg">前缀</label>
+                                                        <div class="col-md-4">
+                                                            <input id="prefix" value="" class="form-control"/>
+                                                        </div>
+                                                        <label class="control-label col-md-2 textMsg">后缀</label>
+                                                        <div class="col-md-4">
+                                                            <input id="suffix" value="" class="form-control"/>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="col-md-12">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-2 textMsg">字体大小</label>
+                                                        <div id="div_fontSize" class="col-md-3">
+                                                            
+                                                            <input type="number" list="sizelist" width="100px"
+                                                                   class="select2 form-control" data-t="stylesel"
+                                                                   data-flag="font-size">
+                                                            <datalist id="sizelist">
+                                                                
+                                                                    <option value="8"></option>
+                                                                
+                                                                    <option value="9"></option>
+                                                                
+                                                                    <option value="10"></option>
+                                                                
+                                                                    <option value="11"></option>
+                                                                
+                                                                    <option value="12"></option>
+                                                                
+                                                                    <option value="13"></option>
+                                                                
+                                                                    <option value="14"></option>
+                                                                
+                                                                    <option value="15"></option>
+                                                                
+                                                                    <option value="16"></option>
+                                                                
+                                                                    <option value="17"></option>
+                                                                
+                                                                    <option value="18"></option>
+                                                                
+                                                                    <option value="19"></option>
+                                                                
+                                                                    <option value="20"></option>
+                                                                
+                                                                    <option value="21"></option>
+                                                                
+                                                                    <option value="22"></option>
+                                                                
+                                                                    <option value="23"></option>
+                                                                
+                                                                    <option value="24"></option>
+                                                                
+                                                                    <option value="25"></option>
+                                                                
+                                                                    <option value="26"></option>
+                                                                
+                                                                    <option value="27"></option>
+                                                                
+                                                                    <option value="28"></option>
+                                                                
+                                                                    <option value="29"></option>
+                                                                
+                                                                    <option value="30"></option>
+                                                                
+                                                                    <option value="31"></option>
+                                                                
+                                                                    <option value="32"></option>
+                                                                
+                                                                    <option value="33"></option>
+                                                                
+                                                                    <option value="34"></option>
+                                                                
+                                                                    <option value="35"></option>
+                                                                
+                                                                    <option value="36"></option>
+                                                                
+                                                                    <option value="37"></option>
+                                                                
+                                                                    <option value="38"></option>
+                                                                
+                                                                    <option value="39"></option>
+                                                                
+                                                                    <option value="40"></option>
+                                                                
+                                                                    <option value="41"></option>
+                                                                
+                                                                    <option value="42"></option>
+                                                                
+                                                                    <option value="43"></option>
+                                                                
+                                                                    <option value="44"></option>
+                                                                
+                                                                    <option value="45"></option>
+                                                                
+                                                                    <option value="46"></option>
+                                                                
+                                                                    <option value="47"></option>
+                                                                
+                                                                    <option value="48"></option>
+                                                                
+                                                                    <option value="49"></option>
+                                                                
+                                                                    <option value="50"></option>
+                                                                
+                                                                    <option value="51"></option>
+                                                                
+                                                                    <option value="52"></option>
+                                                                
+                                                                    <option value="53"></option>
+                                                                
+                                                                    <option value="54"></option>
+                                                                
+                                                                    <option value="55"></option>
+                                                                
+                                                                    <option value="56"></option>
+                                                                
+                                                                    <option value="57"></option>
+                                                                
+                                                                    <option value="58"></option>
+                                                                
+                                                                    <option value="59"></option>
+                                                                
+                                                                    <option value="60"></option>
+                                                                
+                                                                    <option value="61"></option>
+                                                                
+                                                                    <option value="62"></option>
+                                                                
+                                                                    <option value="63"></option>
+                                                                
+                                                                    <option value="64"></option>
+                                                                
+                                                                    <option value="65"></option>
+                                                                
+                                                                    <option value="66"></option>
+                                                                
+                                                                    <option value="67"></option>
+                                                                
+                                                                    <option value="68"></option>
+                                                                
+                                                                    <option value="69"></option>
+                                                                
+                                                                    <option value="70"></option>
+                                                                
+                                                                    <option value="71"></option>
+                                                                
+                                                                    <option value="72"></option>
+                                                                
+                                                                    <option value="73"></option>
+                                                                
+                                                                    <option value="74"></option>
+                                                                
+                                                                    <option value="75"></option>
+                                                                
+                                                                    <option value="76"></option>
+                                                                
+                                                                    <option value="77"></option>
+                                                                
+                                                                    <option value="78"></option>
+                                                                
+                                                                    <option value="79"></option>
+                                                                
+                                                                    <option value="80"></option>
+                                                                
+                                                                    <option value="81"></option>
+                                                                
+                                                                    <option value="82"></option>
+                                                                
+                                                                    <option value="83"></option>
+                                                                
+                                                                    <option value="84"></option>
+                                                                
+                                                                    <option value="85"></option>
+                                                                
+                                                                    <option value="86"></option>
+                                                                
+                                                                    <option value="87"></option>
+                                                                
+                                                                    <option value="88"></option>
+                                                                
+                                                                    <option value="89"></option>
+                                                                
+                                                                    <option value="90"></option>
+                                                                
+                                                                    <option value="91"></option>
+                                                                
+                                                                    <option value="92"></option>
+                                                                
+                                                                    <option value="93"></option>
+                                                                
+                                                                    <option value="94"></option>
+                                                                
+                                                                    <option value="95"></option>
+                                                                
+                                                                    <option value="96"></option>
+                                                                
+                                                                    <option value="97"></option>
+                                                                
+                                                                    <option value="98"></option>
+                                                                
+                                                                    <option value="99"></option>
+                                                                
+                                                                    <option value="100"></option>
+                                                                
+                                                                    <option value="101"></option>
+                                                                
+                                                                    <option value="102"></option>
+                                                                
+                                                                    <option value="103"></option>
+                                                                
+                                                                    <option value="104"></option>
+                                                                
+                                                                    <option value="105"></option>
+                                                                
+                                                                    <option value="106"></option>
+                                                                
+                                                                    <option value="107"></option>
+                                                                
+                                                                    <option value="108"></option>
+                                                                
+                                                                    <option value="109"></option>
+                                                                
+                                                                    <option value="110"></option>
+                                                                
+                                                                    <option value="111"></option>
+                                                                
+                                                                    <option value="112"></option>
+                                                                
+                                                                    <option value="113"></option>
+                                                                
+                                                                    <option value="114"></option>
+                                                                
+                                                                    <option value="115"></option>
+                                                                
+                                                                    <option value="116"></option>
+                                                                
+                                                                    <option value="117"></option>
+                                                                
+                                                                    <option value="118"></option>
+                                                                
+                                                                    <option value="119"></option>
+                                                                
+                                                                    <option value="120"></option>
+                                                                
+                                                                    <option value="121"></option>
+                                                                
+                                                                    <option value="122"></option>
+                                                                
+                                                                    <option value="123"></option>
+                                                                
+                                                                    <option value="124"></option>
+                                                                
+                                                                    <option value="125"></option>
+                                                                
+                                                                    <option value="126"></option>
+                                                                
+                                                                    <option value="127"></option>
+                                                                
+                                                                    <option value="128"></option>
+                                                                
+                                                                    <option value="129"></option>
+                                                                
+                                                                    <option value="130"></option>
+                                                                
+                                                                    <option value="131"></option>
+                                                                
+                                                                    <option value="132"></option>
+                                                                
+                                                                    <option value="133"></option>
+                                                                
+                                                                    <option value="134"></option>
+                                                                
+                                                                    <option value="135"></option>
+                                                                
+                                                                    <option value="136"></option>
+                                                                
+                                                                    <option value="137"></option>
+                                                                
+                                                                    <option value="138"></option>
+                                                                
+                                                                    <option value="139"></option>
+                                                                
+                                                                    <option value="140"></option>
+                                                                
+                                                                    <option value="141"></option>
+                                                                
+                                                                    <option value="142"></option>
+                                                                
+                                                                    <option value="143"></option>
+                                                                
+                                                                    <option value="144"></option>
+                                                                
+                                                                    <option value="145"></option>
+                                                                
+                                                                    <option value="146"></option>
+                                                                
+                                                                    <option value="147"></option>
+                                                                
+                                                                    <option value="148"></option>
+                                                                
+                                                                    <option value="149"></option>
+                                                                
+                                                                    <option value="150"></option>
+                                                                
+                                                                    <option value="151"></option>
+                                                                
+                                                                    <option value="152"></option>
+                                                                
+                                                                    <option value="153"></option>
+                                                                
+                                                                    <option value="154"></option>
+                                                                
+                                                                    <option value="155"></option>
+                                                                
+                                                                    <option value="156"></option>
+                                                                
+                                                                    <option value="157"></option>
+                                                                
+                                                                    <option value="158"></option>
+                                                                
+                                                                    <option value="159"></option>
+                                                                
+                                                                    <option value="160"></option>
+                                                                
+                                                                    <option value="161"></option>
+                                                                
+                                                                    <option value="162"></option>
+                                                                
+                                                                    <option value="163"></option>
+                                                                
+                                                                    <option value="164"></option>
+                                                                
+                                                                    <option value="165"></option>
+                                                                
+                                                                    <option value="166"></option>
+                                                                
+                                                                    <option value="167"></option>
+                                                                
+                                                                    <option value="168"></option>
+                                                                
+                                                                    <option value="169"></option>
+                                                                
+                                                                    <option value="170"></option>
+                                                                
+                                                                    <option value="171"></option>
+                                                                
+                                                                    <option value="172"></option>
+                                                                
+                                                                    <option value="173"></option>
+                                                                
+                                                                    <option value="174"></option>
+                                                                
+                                                                    <option value="175"></option>
+                                                                
+                                                                    <option value="176"></option>
+                                                                
+                                                                    <option value="177"></option>
+                                                                
+                                                                    <option value="178"></option>
+                                                                
+                                                                    <option value="179"></option>
+                                                                
+                                                                    <option value="180"></option>
+                                                                
+                                                                    <option value="181"></option>
+                                                                
+                                                                    <option value="182"></option>
+                                                                
+                                                                    <option value="183"></option>
+                                                                
+                                                                    <option value="184"></option>
+                                                                
+                                                                    <option value="185"></option>
+                                                                
+                                                                    <option value="186"></option>
+                                                                
+                                                                    <option value="187"></option>
+                                                                
+                                                                    <option value="188"></option>
+                                                                
+                                                                    <option value="189"></option>
+                                                                
+                                                                    <option value="190"></option>
+                                                                
+                                                                    <option value="191"></option>
+                                                                
+                                                                    <option value="192"></option>
+                                                                
+                                                                    <option value="193"></option>
+                                                                
+                                                                    <option value="194"></option>
+                                                                
+                                                                    <option value="195"></option>
+                                                                
+                                                                    <option value="196"></option>
+                                                                
+                                                                    <option value="197"></option>
+                                                                
+                                                                    <option value="198"></option>
+                                                                
+                                                                    <option value="199"></option>
+                                                                
+                                                                    <option value="200"></option>
+                                                                
+                                                                    <option value="201"></option>
+                                                                
+                                                                    <option value="202"></option>
+                                                                
+                                                                    <option value="203"></option>
+                                                                
+                                                                    <option value="204"></option>
+                                                                
+                                                                    <option value="205"></option>
+                                                                
+                                                                    <option value="206"></option>
+                                                                
+                                                                    <option value="207"></option>
+                                                                
+                                                                    <option value="208"></option>
+                                                                
+                                                                    <option value="209"></option>
+                                                                
+                                                                    <option value="210"></option>
+                                                                
+                                                                    <option value="211"></option>
+                                                                
+                                                                    <option value="212"></option>
+                                                                
+                                                                    <option value="213"></option>
+                                                                
+                                                                    <option value="214"></option>
+                                                                
+                                                                    <option value="215"></option>
+                                                                
+                                                                    <option value="216"></option>
+                                                                
+                                                                    <option value="217"></option>
+                                                                
+                                                                    <option value="218"></option>
+                                                                
+                                                                    <option value="219"></option>
+                                                                
+                                                                    <option value="220"></option>
+                                                                
+                                                                    <option value="221"></option>
+                                                                
+                                                                    <option value="222"></option>
+                                                                
+                                                                    <option value="223"></option>
+                                                                
+                                                                    <option value="224"></option>
+                                                                
+                                                                    <option value="225"></option>
+                                                                
+                                                                    <option value="226"></option>
+                                                                
+                                                                    <option value="227"></option>
+                                                                
+                                                                    <option value="228"></option>
+                                                                
+                                                                    <option value="229"></option>
+                                                                
+                                                                    <option value="230"></option>
+                                                                
+                                                                    <option value="231"></option>
+                                                                
+                                                                    <option value="232"></option>
+                                                                
+                                                                    <option value="233"></option>
+                                                                
+                                                                    <option value="234"></option>
+                                                                
+                                                                    <option value="235"></option>
+                                                                
+                                                                    <option value="236"></option>
+                                                                
+                                                                    <option value="237"></option>
+                                                                
+                                                                    <option value="238"></option>
+                                                                
+                                                                    <option value="239"></option>
+                                                                
+                                                                    <option value="240"></option>
+                                                                
+                                                                    <option value="241"></option>
+                                                                
+                                                                    <option value="242"></option>
+                                                                
+                                                                    <option value="243"></option>
+                                                                
+                                                                    <option value="244"></option>
+                                                                
+                                                                    <option value="245"></option>
+                                                                
+                                                                    <option value="246"></option>
+                                                                
+                                                                    <option value="247"></option>
+                                                                
+                                                                    <option value="248"></option>
+                                                                
+                                                                    <option value="249"></option>
+                                                                
+                                                                    <option value="250"></option>
+                                                                
+                                                                    <option value="251"></option>
+                                                                
+                                                                    <option value="252"></option>
+                                                                
+                                                                    <option value="253"></option>
+                                                                
+                                                                    <option value="254"></option>
+                                                                
+                                                                    <option value="255"></option>
+                                                                
+                                                                    <option value="256"></option>
+                                                                
+                                                                    <option value="257"></option>
+                                                                
+                                                                    <option value="258"></option>
+                                                                
+                                                                    <option value="259"></option>
+                                                                
+                                                                    <option value="260"></option>
+                                                                
+                                                                    <option value="261"></option>
+                                                                
+                                                                    <option value="262"></option>
+                                                                
+                                                                    <option value="263"></option>
+                                                                
+                                                                    <option value="264"></option>
+                                                                
+                                                                    <option value="265"></option>
+                                                                
+                                                                    <option value="266"></option>
+                                                                
+                                                                    <option value="267"></option>
+                                                                
+                                                                    <option value="268"></option>
+                                                                
+                                                                    <option value="269"></option>
+                                                                
+                                                                    <option value="270"></option>
+                                                                
+                                                                    <option value="271"></option>
+                                                                
+                                                                    <option value="272"></option>
+                                                                
+                                                                    <option value="273"></option>
+                                                                
+                                                                    <option value="274"></option>
+                                                                
+                                                                    <option value="275"></option>
+                                                                
+                                                                    <option value="276"></option>
+                                                                
+                                                                    <option value="277"></option>
+                                                                
+                                                                    <option value="278"></option>
+                                                                
+                                                                    <option value="279"></option>
+                                                                
+                                                                    <option value="280"></option>
+                                                                
+                                                                    <option value="281"></option>
+                                                                
+                                                                    <option value="282"></option>
+                                                                
+                                                                    <option value="283"></option>
+                                                                
+                                                                    <option value="284"></option>
+                                                                
+                                                                    <option value="285"></option>
+                                                                
+                                                                    <option value="286"></option>
+                                                                
+                                                                    <option value="287"></option>
+                                                                
+                                                                    <option value="288"></option>
+                                                                
+                                                                    <option value="289"></option>
+                                                                
+                                                                    <option value="290"></option>
+                                                                
+                                                                    <option value="291"></option>
+                                                                
+                                                                    <option value="292"></option>
+                                                                
+                                                                    <option value="293"></option>
+                                                                
+                                                                    <option value="294"></option>
+                                                                
+                                                                    <option value="295"></option>
+                                                                
+                                                                    <option value="296"></option>
+                                                                
+                                                                    <option value="297"></option>
+                                                                
+                                                                    <option value="298"></option>
+                                                                
+                                                                    <option value="299"></option>
+                                                                
+                                                                    <option value="300"></option>
+                                                                
+                                                            </datalist>
+                                                        </div>
+                                                        <label class="control-label col-md-2 textMsg">加粗</label>
+                                                        <div class="col-md-1">
+                                                            <input type="checkbox" id="stylefontw"
+                                                                   class="form-control"/>
+                                                        </div>
+                                                        <label class="control-label col-md-2 textMsg">刪除线</label>
+                                                        <div class="col-md-1">
+                                                            <input type="checkbox" id="text-decoration"
+                                                                   class="form-control"/>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-3 textMsg">字体颜色</label>
+                                                        <div class="col-md-6">
+                                                            <select id="fontcolor" data-t="stylesel"
+                                                                    data-flag="color" class="select2 form-control">
+                                                                <option value="#000000" class="textMsg">黑</option>
+                                                                <option value="#ffffff" class="textMsg">白</option>
+                                                                <option value="#ff0000" class="textMsg">红</option>
+                                                                
+                                                                
+                                                                
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-3 textMsg">背景颜色</label>
+                                                        <div class="col-md-6">
+                                                            <select id="backcolor" data-t="stylesel"
+                                                                    data-flag="background-color"
+                                                                    class="select2 form-control">
+                                                                <option value="#000000" class="textMsg">黑</option>
+                                                                <option value="#ffffff" class="textMsg">白</option>
+                                                                <option value="#ff0000" class="textMsg">红</option>
+                                                                <option value="#ffffff00" class="textMsg">透明</option>
+                                                                
+                                                                
+                                                                
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-12">
+                                                    <div class="form-group">
+                                                        <label class="control-label col-md-2 textMsg">字体</label>
+                                                        <div class="col-md-3">
+                                                            <select class="select2 form-control" data-t="stylesel"
+                                                                    id="fontStyleSelect" data-flag="font-family">
+                                                                <!-- <option class="textMsg">宋体</option>
+                                                                <option class="textMsg">黑体</option>
+                                                                <option class="textMsg">微软雅黑</option>
+                                                                <option class="textMsg">楷体</option>
+                                                                <option class="textMsg">仿宋</option>
+                                                                <option class="textMsg">华文楷体</option>
+                                                                <option class="textMsg">新宋体</option>
+                                                                <option class="textMsg">仿宋</option>
+                                                                <option class="textMsg">等线</option>
+                                                                <option class="textMsg">gulim</option>
+                                                                <option class="textMsg">Malgun Gothic</option>
+                                                                <option class="textMsg">Myungjo</option>
+                                                                <option class="textMsg">NanumSquare ExtraBold</option>
+                                                                HUAWEI 中文字体
+                                                                <option class="textMsg">FZLanTingHei-B-BIG5</option>
+                                                                <option class="textMsg">FZLanTingHeiT-B-GB</option>
+                                                                <option class="textMsg">FZLanTingHeiS-B-GB</option>
+                                                                <option class="textMsg">FZLanTingHei-B-GBK</option>
+                                                                <option class="textMsg">FZLanTingHeiS-RC-GB</option>
+
+                                                                <option class="textMsg">FZLanTingHeiS-R-GB</option>
+                                                                <option class="textMsg">FZLanTingHeiS-EL-GB</option>
+                                                                <option class="textMsg">FZLanTingHei-L-BIG5</option>
+                                                                <option class="textMsg">FZLanTingHeiT-L-GB</option>
+                                                                <option class="textMsg">FZLanTingHeiS-L-GB</option>
+
+                                                                <option class="textMsg">FZLanTingHei-L-GBK</option>
+                                                                <option class="textMsg">FZLanTingHeiS-DB-GB</option>
+                                                                <option class="textMsg">FZLanTingHei-M-BIG5</option>
+                                                                <option class="textMsg">FZLanTingHeiT-M-GB</option>
+                                                                <option class="textMsg">FZLanTingHei-M-GBK</option>
+                                                                HUAWEI 英文字体
+                                                                <option class="textMsg">HuaweiSans-Bold</option>
+                                                                <option class="textMsg">HuaweiSans-Light</option>
+                                                                <option class="textMsg">HuaweiSans-Medium</option>
+                                                                <option class="textMsg">HuaweiSans-Regular</option>
+                                                                <option class="textMsg">HuaweiSans-Thin</option>
+                                                                HAIWEI 日文字体
+                                                                <option class="textMsg">MS Gothic</option> -->
+                                                                
+                                                                    <option value="宋体">宋体</option>
+                                                                
+                                                                    <option value="黑体">黑体</option>
+                                                                
+                                                                    <option value="微软雅黑">微软雅黑</option>
+                                                                
+                                                                    <option value="楷体">楷体</option>
+                                                                
+                                                                    <option value="仿宋">仿宋</option>
+                                                                
+                                                                    <option value="华文楷体">华文楷体</option>
+                                                                
+                                                                    <option value="等线">等线</option>
+                                                                
+                                                                    <option value="gulim">gulim</option>
+                                                                
+                                                                    <option value="Malgun">Malgun</option>
+                                                                
+                                                                    <option value="Myungjo">Myungjo</option>
+                                                                
+                                                                    <option value="NanumSquare ExtraBold">NanumSquare ExtraBold</option>
+                                                                
+                                                                    <option value="FZLanTingHei-B-BIG5">FZLanTingHei-B-BIG5</option>
+                                                                
+                                                                    <option value="FZLanTingHeiT-B-GB">FZLanTingHeiT-B-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHeiS-B-GB">FZLanTingHeiS-B-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHei-B-GBK">FZLanTingHei-B-GBK</option>
+                                                                
+                                                                    <option value="FZLanTingHeiS-RC-GB">FZLanTingHeiS-RC-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHeiS-R-GB">FZLanTingHeiS-R-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHeiS-EL-GB">FZLanTingHeiS-EL-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHei-L-BIG5">FZLanTingHei-L-BIG5</option>
+                                                                
+                                                                    <option value="FZLanTingHeiT-L-GB">FZLanTingHeiT-L-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHeiS-L-GB">FZLanTingHeiS-L-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHei-L-GBK">FZLanTingHei-L-GBK</option>
+                                                                
+                                                                    <option value="FZLanTingHeiS-DB-GB">FZLanTingHeiS-DB-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHei-M-BIG5">FZLanTingHei-M-BIG5</option>
+                                                                
+                                                                    <option value="FZLanTingHeiT-M-GB">FZLanTingHeiT-M-GB</option>
+                                                                
+                                                                    <option value="FZLanTingHei-M-GBK">FZLanTingHei-M-GBK</option>
+                                                                
+                                                                    <option value="HuaweiSans-Bold">HuaweiSans-Bold</option>
+                                                                
+                                                                    <option value="HuaweiSans-Light">HuaweiSans-Light</option>
+                                                                
+                                                                    <option value="HuaweiSans-Medium">HuaweiSans-Medium</option>
+                                                                
+                                                                    <option value="HuaweiSans-Regular">HuaweiSans-Regular</option>
+                                                                
+                                                                    <option value="HuaweiSans-Thin">HuaweiSans-Thin</option>
+                                                                
+                                                                    <option value="MS Gothic">MS Gothic</option>
+                                                                
+                                                                    <option value="仿宋_GB2312">仿宋_GB2312</option>
+                                                                
+                                                                    <option value="方正小标宋简体">方正小标宋简体</option>
+                                                                
+                                                                    <option value="方正小标宋_GBK">方正小标宋_GBK</option>
+                                                                
+                                                                    <option value="方正魏碑简体">方正魏碑简体</option>
+                                                                
+                                                                    <option value="华文新魏">华文新魏</option>
+                                                                
+                                                            </select>
+                                                        </div>
+                                                        <label class="control-label col-md-2">
+                                                            <label class="textMsg">显示方式</label>
+                                                        </label>
+                                                        <div class="col-md-3">
+                                                            <select class="select2 form-control"
+                                                                    data-flag="writing-mode" data-t="stylesel">
+                                                                <option value="" selected class="textMsg">横显</option>
+                                                                <option value="vertical-lr" class="textMsg">竖显</option>
+                                                            </select>
+                                                        </div>
+                                                        <a style="width: 80px; height: 33px; margin-top: 10px"
+                                                           onclick="openFont()"><label
+                                                                class="control-label textMsg">添加字体</label></a>
+                                                    </div>
+                                                    <div class="col-md-12">
+                                                        <label class="control-label col-md-2 textMsg">对齐</label>
+                                                        <div class="col-md-4">
+                                                            <select class="select2 form-control" data-t="stylesel"
+                                                                    data-flag="text-align">
+                                                                <option value="left" class="textMsg">靠左</option>
+                                                                <option value="center" class="textMsg">居中</option>
+                                                                <option value="right" class="textMsg">靠右</option>
+                                                            </select>
+                                                        </div>
+                                                        <div class="form-group">
+                                                            <label class="control-label col-md-3 textMsg">边框粗细</label>
+                                                            <div class="col-md-3">
+                                                                <input data-t="styleinput" data-flag="border-width"
+                                                                       value="1" class="form-control"/>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <div class="col-md-12">
+                                                        <div class="form-group">
+                                                            <label class="control-label col-md-5 textMsg">单行字体自适应</label>
+                                                            <div class="col-md-4">
+                                                                <input type="checkbox" id="self-reacting"
+                                                                       class="form-control"/>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal fade" id="myModal" tabindex="-1" role="dialog"
+         aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h4 class="modal-title textMsg" id="myModalLabel">模态框（Modal）标题</h4>
+                </div>
+                <div class="modal-body textMsg" id="myModalLabelInfo">在这里添加一些文本</div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary textMsg"
+                            data-dismiss="modal">关闭
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- 添加字体模态框 -->
+    <div id="addFont" class="addFont">
+        <form action="" data-toggle="validator" method="post" id="fileForm"
+              enctype="multipart/form-data">
+            <div class="input-group">
+                <div class="textMsg">字体名称</div>
+                <input id="font-Name" name="fontName" type="text" placeholder="Please enter the font style name."/>
+            </div>
+            <div class="input-group">
+                <div class="textMsg">系统字体路径</div>
+                <input id="font-path" name="fontPath" type="text"
+                       value="/usr/share/fonts/"/>
+            </div>
+            <div class="input-group">
+                <div class="textMsg">选择字体文件</div>
+                <input id="font-file" name="fontFile" type="file" value=""/>
+            </div>
+        </form>
+        <div class="button-group">
+            <button onclick="uploadFontFile()" value="确定" class="textMsg">确定</button>
+            <button onclick="closeFont()" class="textMsg">关闭</button>
+        </div>
+    </div>
+    <!-- 遮罩框 -->
+    <div id="zzk-div" class="zzk-div"></div>
+</div>
+<script src="assets/plugins/jquery-1.10.2.min.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/jquery-migrate-1.2.1.min.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/jquery-ui/jquery-ui-1.10.3.custom.min.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/bootstrap/js/bootstrap.min.js"
+        type="text/javascript"></script>
+<script
+        src="assets/plugins/bootstrap-hover-dropdown/twitter-bootstrap-hover-dropdown.min.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/jquery-slimscroll/jquery.slimscroll.min.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/jquery.blockui.min.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/jquery.cokie.min.js" type="text/javascript"></script>
+<script src="assets/plugins/uniform/jquery.uniform.min.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/flot/jquery.flot.js" type="text/javascript"></script>
+<script src="assets/plugins/flot/jquery.flot.resize.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/jquery.pulsate.min.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/bootstrap-daterangepicker/moment.min.js"
+        type="text/javascript"></script>
+<script
+        src="assets/plugins/bootstrap-daterangepicker/daterangepicker.js"
+        type="text/javascript"></script>
+<script src="assets/plugins/gritter/js/jquery.gritter.js"
+        type="text/javascript"></script>
+<script type="text/javascript"
+        src="app/js/component_v2/component/colorpicker/js/colorpicker.js"></script>
+<script type="text/javascript" src="app/js/translate/translate.js"></script>
+<script type="text/javascript" src="app/js/DocUtil.js"></script>
+<script type="text/javascript"
+        src="app/js/component_v2/component/js/component.js"></script>
+<script src="assets/scripts/app.js" type="text/javascript"></script>
+<script type="text/javascript"
+        src="assets/plugins/jquery/jquery-form.js"></script>
+<script type="text/javascript" src="app/js/index.js"></script>
+</body>
+</html>
