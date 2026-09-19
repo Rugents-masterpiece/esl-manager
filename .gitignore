@@ -1,0 +1,11 @@
+.orbit/*
+!.orbit/auto_tasks/
+!.orbit/resources/
+!.orbit/routines/
+!.orbit/config.toml
+.orbit/**/*.lock
+__pycache__/
+*.py[cod]
+webapp/data/
+webapp/*.db
+.coverage

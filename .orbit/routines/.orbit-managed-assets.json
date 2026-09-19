@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 2,
+  "assetKind": "routine",
+  "assets": {
+    "auto_task_scheduler": "ccbbd163fdcad4a66e0ba02f695d5630442469e537dafadad9ea94e4d75de734",
+    "ci_failure_sweep": "4fefd55599448cc41eb5bc9bf5af523ff37641d0797bf515c54bb06f674bd21e",
+    "dependabot_alert_sweep": "dca73a654e44aea268801092f7ffdb3845905d55f340f9a4203861fc47c73597",
+    "ship_sweep": "523de24e44e9bc45a4f892aae1b07ee97b302e8f250334c28770d2753001d0f6",
+    "task_pilot": "6664692d50f76df3316b56b132b22156b476fd4bfc43e3844a085246c777b0dc",
+    "task_triage": "da5528517c7d4420a48858fddb1375f8927a31453384cbd0c6155f5a75bb4e44",
+    "worktree_gc": "c72d18d1460eeec6b4fcba85a2b6d6ce6eee1ecfc3e850f45419028c0eb1f7ae"
+  },
+  "routineProvenance": {
+    "auto_task_scheduler": {
+      "templateDigest": "7f3b1a41dfe43b5445b47450f21d8e424fcdeeaa977a6f09d4ded03fc7ed16be",
+      "renderedDigest": "ccbbd163fdcad4a66e0ba02f695d5630442469e537dafadad9ea94e4d75de734",
+      "binding": {
+        "name": "auto-task-scheduler-esl_manager",
+        "hosts": [
+          "pc-agent"
+        ]
+      }
+    },
+    "ci_failure_sweep": {
+      "templateDigest": "a1b01d81293cbddb16f636aaf1d097a1ef7c1a90f88046a0b9223bc1a6158825",
+      "renderedDigest": "4fefd55599448cc41eb5bc9bf5af523ff37641d0797bf515c54bb06f674bd21e",
+      "binding": {
+        "name": "ci-failure-sweep-esl_manager",
+        "hosts": [
+          "pc-agent"
+        ]
+      }
+    },
+    "dependabot_alert_sweep": {
+      "templateDigest": "e66de2d11cf610f8bb9100845aafe8a85a33bc5678a10e30bd062d6894ad0d0f",
+      "renderedDigest": "dca73a654e44aea268801092f7ffdb3845905d55f340f9a4203861fc47c73597",
+      "binding": {
+        "name": "dependabot-alert-sweep-esl_manager",
+        "hosts": [
+          "pc-agent"
+        ]
+      }
+    },
+    "ship_sweep": {
+      "templateDigest": "416134b342e33f1b2565b88bc2e41b885a39b21c02324f0c8ed79bec74c562d1",
+      "renderedDigest": "523de24e44e9bc45a4f892aae1b07ee97b302e8f250334c28770d2753001d0f6",
+      "binding": {
+        "name": "ship-sweep-esl_manager",
+        "hosts": [
+          "pc-agent"
+        ]
+      }
+    },
+    "task_pilot": {
+      "templateDigest": "f8b9699a0dc505ea5cbe44998b88995b8720d6e0bdde3fa6ab3f40bec863f280",
+      "renderedDigest": "6664692d50f76df3316b56b132b22156b476fd4bfc43e3844a085246c777b0dc",
+      "binding": {
+        "name": "task-pilot-esl_manager",
+        "hosts": [
+          "pc-agent"
+        ]
+      }
+    },
+    "task_triage": {
+      "templateDigest": "21feb397078d47165a0e2a618e8f0dfc97cdbd02c60d0595d71b43b20abd7c5e",
+      "renderedDigest": "da5528517c7d4420a48858fddb1375f8927a31453384cbd0c6155f5a75bb4e44",
+      "binding": {
+        "name": "task-triage-esl_manager",
+        "hosts": [
+          "pc-agent"
+        ]
+      }
+    },
+    "worktree_gc": {
+      "templateDigest": "b03d4f900f0746dd317d82fc11b6cd81a398edee18519e3f650d37ed9195a70d",
+      "renderedDigest": "c72d18d1460eeec6b4fcba85a2b6d6ce6eee1ecfc3e850f45419028c0eb1f7ae",
+      "binding": {
+        "name": "worktree-gc-esl_manager",
+        "hosts": [
+          "pc-agent"
+        ]
+      }
+    }
+  }
+}
