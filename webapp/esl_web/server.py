@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import hmac
 import ipaddress
 import io
 import json
 import mimetypes
 import os
+import re
+import secrets
+import threading
+import time
+from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,10 +27,19 @@ from .service import (
     NotFoundError,
     Service,
     ServiceError,
+    UnauthorizedError,
     ValidationError,
 )
 from .storage import Storage
 from .vendor import VendorClient, VendorConfig, VendorConfigurationError, live_writes_authorized
+
+
+API_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{64}")
+
+
+def is_valid_api_token(value: Any) -> bool:
+    """Accept the canonical 64-character encoding produced from 48 random bytes."""
+    return isinstance(value, str) and API_TOKEN_PATTERN.fullmatch(value) is not None
 
 
 def _reject_json_constant(_value: str) -> None:
@@ -42,10 +58,18 @@ class EslHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], handler, service: Service,
                  vendor_client: VendorClient | None = None,
-                 static_root: Path | None = None):
+                 static_root: Path | None = None,
+                 api_token: str | None = None):
+        if api_token is not None and not is_valid_api_token(api_token):
+            raise ValueError("API token must be a 64-character URL-safe token")
         super().__init__(address, handler)
         self.service = service
         self.vendor_client = vendor_client
+        self.api_token_digest = (
+            hashlib.sha256(api_token.encode("utf-8")).digest() if api_token is not None else None
+        )
+        self.sessions: dict[str, float] = {}
+        self.session_lock = threading.Lock()
         self.static_root = (static_root or Path(__file__).resolve().parent.parent / "static").resolve()
 
 
@@ -55,12 +79,14 @@ class ApiHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
 
-    def _json(self, status: int, payload: Any) -> None:
+    def _json(self, status: int, payload: Any, *, headers: dict[str, str] | None = None) -> None:
         content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(content)
 
@@ -129,6 +155,56 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
+    def _session_id(self) -> str | None:
+        raw_cookie = self.headers.get("Cookie")
+        if not raw_cookie:
+            return None
+        cookie = SimpleCookie()
+        try:
+            cookie.load(raw_cookie)
+        except Exception:
+            return None
+        morsel = cookie.get("esl_session")
+        return morsel.value if morsel is not None else None
+
+    def _require_authenticated_session(self, server: EslHTTPServer) -> None:
+        session_id = self._session_id()
+        now = time.monotonic()
+        with server.session_lock:
+            expired = [key for key, expiry in server.sessions.items() if expiry <= now]
+            for key in expired:
+                server.sessions.pop(key, None)
+            expiry = server.sessions.get(session_id or "")
+            if expiry is None:
+                raise UnauthorizedError("Authentication required")
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host")
+        if origin and origin not in {f"http://{host}", f"https://{host}"}:
+            raise ForbiddenError("Cross-origin API mutation is forbidden")
+
+    def _create_session(self, server: EslHTTPServer) -> None:
+        if server.api_token_digest is None:
+            raise NotFoundError("Route not found")
+        data = self._body()
+        token = data.get("token") if isinstance(data, dict) else None
+        supplied = hashlib.sha256(token.encode("utf-8")).digest() if isinstance(token, str) else b""
+        if not hmac.compare_digest(supplied, server.api_token_digest):
+            raise UnauthorizedError("Invalid authentication token")
+        session_id = secrets.token_urlsafe(32)
+        with server.session_lock:
+            expired = [key for key, expiry in server.sessions.items() if expiry <= time.monotonic()]
+            for key in expired:
+                server.sessions.pop(key, None)
+            while len(server.sessions) >= 128:
+                server.sessions.pop(next(iter(server.sessions)))
+            server.sessions[session_id] = time.monotonic() + 28_800
+        self._json(HTTPStatus.OK, {"authenticated": True}, headers={
+            "Set-Cookie": (
+                f"esl_session={session_id}; Path=/; Max-Age=28800; "
+                "HttpOnly; SameSite=Strict"
+            )
+        })
+
     def _static_file(self, request_path: str) -> bool:
         """Serve only files contained by the configured static directory."""
         server = cast(EslHTTPServer, self.server)
@@ -160,7 +236,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path.rstrip("/") or "/"
             service = cast(EslHTTPServer, self.server).service
             server = cast(EslHTTPServer, self.server)
-            if not _is_loopback_address(self.client_address[0]):
+            if method == "POST" and path == "/api/session":
+                self._create_session(server)
+                return
+            if server.api_token_digest is not None:
+                self._require_authenticated_session(server)
+            elif not _is_loopback_address(self.client_address[0]):
                 self.close_connection = True
                 raise ForbiddenError("API mutations are restricted to the local host")
             if method == "POST" and path == "/api/sync/read-only":
@@ -174,9 +255,6 @@ class ApiHandler(BaseHTTPRequestHandler):
                         raise IntegrationError("Vendor integration is not configured") from error
                 self._json(HTTPStatus.OK, service.sync_read_only(client))
             elif method == "POST" and path == "/api/dispatch/live":
-                if not _is_loopback_address(self.client_address[0]):
-                    self.close_connection = True
-                    raise ForbiddenError("Live ESL writes are restricted to the local host")
                 if os.environ.get("ESL_LIVE_WRITES") != "1":
                     self.close_connection = True
                     raise ForbiddenError("Live ESL writes are disabled or not explicitly confirmed")
@@ -325,7 +403,8 @@ def create_server(host: str = "127.0.0.1", port: int = 0, *,
                   database_path: str | Path | None = None, seed: bool = True,
                   service: Service | None = None,
                   vendor_client: VendorClient | None = None,
-                  static_root: str | Path | None = None) -> EslHTTPServer:
+                  static_root: str | Path | None = None,
+                  api_token: str | None = None) -> EslHTTPServer:
     """Create, but do not start, a threaded API server."""
     if service is None:
         if database_path is None:
@@ -336,4 +415,4 @@ def create_server(host: str = "127.0.0.1", port: int = 0, *,
             storage.seed_demo()
         service = Service(storage)
     root = Path(static_root) if static_root is not None else None
-    return EslHTTPServer((host, port), ApiHandler, service, vendor_client, root)
+    return EslHTTPServer((host, port), ApiHandler, service, vendor_client, root, api_token)

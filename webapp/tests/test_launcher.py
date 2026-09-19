@@ -21,6 +21,7 @@ class LiveLauncherTests(unittest.TestCase):
             "username": "operator",
             "password": "secret",
             "live_writes": live_writes,
+            "api_token": "A" * 64,
         }))
         os.chmod(self.path, 0o600)
 
@@ -45,6 +46,22 @@ class LiveLauncherTests(unittest.TestCase):
         self.write_settings(False)
         settings = json.loads(self.path.read_text())
         settings["connect_timeout"] = True
+        self.path.write_text(json.dumps(settings))
+        with self.assertRaises(ValueError):
+            load_settings(self.path)
+
+    def test_requires_strong_api_token(self):
+        self.write_settings(True)
+        settings = json.loads(self.path.read_text())
+        del settings["api_token"]
+        self.path.write_text(json.dumps(settings))
+        with self.assertRaises(ValueError):
+            load_settings(self.path)
+        settings["api_token"] = "too-short"
+        self.path.write_text(json.dumps(settings))
+        with self.assertRaises(ValueError):
+            load_settings(self.path)
+        settings["api_token"] = "A" * 32
         self.path.write_text(json.dumps(settings))
         with self.assertRaises(ValueError):
             load_settings(self.path)

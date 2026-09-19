@@ -52,6 +52,11 @@ class ForbiddenError(ServiceError):
     status = 403
 
 
+class UnauthorizedError(ServiceError):
+    code = "unauthorized"
+    status = 401
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 

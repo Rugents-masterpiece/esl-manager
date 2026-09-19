@@ -50,6 +50,7 @@ class FrontendSourceTests(unittest.TestCase):
             "view-tags", "view-products", "view-templates", "view-routers", "view-jobs",
             "view-audit", "product-modal", "product-form", "tag-search", "tag-status",
             "tag-battery", "tag-signal", "tag-router", "selected-count",
+            "auth-modal", "auth-form", "auth-token", "auth-button",
         ):
             self.assertIn(marker, parser.ids)
         self.assertEqual(parser.scripts, ["/static/app.js"])
@@ -74,7 +75,7 @@ class FrontendSourceTests(unittest.TestCase):
         for endpoint in (
             "/api/dashboard", "/api/tags", "/api/products", "/api/templates", "/api/routers",
             "/api/jobs", "/api/alerts", "/api/audit", "/api/bindings", "/api/sync/read-only",
-            "/simulate", "/retry", "/api/products/export.csv",
+            "/simulate", "/retry", "/api/products/export.csv", "/api/session",
         ):
             self.assertIn(endpoint, script if endpoint != "/api/products/export.csv" else combined)
         for method in ('method: "POST"', 'method: "PATCH"', 'method: "DELETE"'):
@@ -90,6 +91,11 @@ class FrontendSourceTests(unittest.TestCase):
         self.assertIn('router.version || router.firmware_version', script)
         self.assertIn('health.mode === "live"', script)
         self.assertIn('health.mode === "read_only"', script)
+        self.assertIn('byId("auth-button").hidden = !(live || readOnly)', script)
+        self.assertIn('function closeAuthModal()', script)
+        self.assertIn('byId("auth-form").reset()', script)
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        self.assertIn('autocomplete="off"', html)
 
 
 class StaticServerTests(unittest.TestCase):

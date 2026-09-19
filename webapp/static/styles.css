@@ -61,6 +61,7 @@ main { min-height: 100vh; margin-left: var(--side-width); padding-top: 48px; }
 .safety-banner { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 8px 32px; color: #3d2f00; background: #fff8e1; border-bottom: 1px solid #d2a106; font-size: 13px; }
 .safety-banner strong { display: inline-block; margin-right: 5px; }
 .safety-banner.live { color: #5c0f0f; background: #fff1f1; border-bottom-color: #da1e28; }
+.banner-actions { display: flex; gap: 8px; flex: 0 0 auto; }
 .view { max-width: 1500px; margin: 0 auto; padding: 32px; }
 .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 32px; }
 h1, h2, h3, p { margin-top: 0; }
@@ -165,6 +166,7 @@ dialog::backdrop { background: #161616aa; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 16px; padding: 24px 20px; }
 .field-full { grid-column: 1 / -1; }
 .form-error { margin: 16px 20px 0; padding: 12px; border-left: 4px solid var(--red); background: #fff1f1; color: #750e13; }
+.field-help { margin: 8px 0 0; color: var(--gray-70); font-size: 12px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 1px; padding: 16px 20px; background: var(--gray-10); }
 #binding-form > .field { padding: 24px 20px; }
 
@@ -183,6 +185,8 @@ dialog::backdrop { background: #161616aa; }
   .side-nav.open { transform: translateX(0); }
   main { margin-left: 0; }
   .safety-banner { align-items: stretch; flex-direction: column; gap: 8px; padding: 12px 16px; }
+  .banner-actions { flex-wrap: wrap; }
+  .banner-actions .button { flex: 1 1 240px; }
   .view { padding: 24px 16px; }
   .page-heading { flex-direction: column; margin-bottom: 24px; }
   .heading-actions { width: 100%; flex-wrap: wrap; }

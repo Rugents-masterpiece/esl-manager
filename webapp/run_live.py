@@ -9,7 +9,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from esl_web.server import create_server
+from esl_web.server import create_server, is_valid_api_token
 from esl_web.vendor import VendorClient, VendorConfig
 
 ROOT = Path(__file__).resolve().parent
@@ -39,6 +39,8 @@ def load_settings(path: Path) -> dict[str, Any]:
     for field in ("base_url", "username", "password"):
         if not isinstance(settings.get(field), str) or not settings[field]:
             raise ValueError(f"{field} must be a non-empty string")
+    if not is_valid_api_token(settings.get("api_token")):
+        raise ValueError("api_token must be a 64-character URL-safe token")
     for field in ("connect_timeout", "read_timeout"):
         if field not in settings:
             continue
@@ -65,6 +67,7 @@ def main() -> None:
         database_path=DATABASE,
         seed=False,
         vendor_client=VendorClient(config),
+        api_token=settings["api_token"],
     )
     server.serve_forever()
 

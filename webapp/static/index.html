@@ -34,7 +34,7 @@
     <main id="main-content" tabindex="-1">
       <div id="safety-banner" class="safety-banner" role="status">
         <div><strong id="mode-title">Simulačný režim</strong><span id="mode-description"> Zmeny sú lokálne. Žiadny zápis sa neposiela na fyzické ESL zariadenia.</span></div>
-        <button id="sync-button" class="button button-tertiary" type="button">Synchronizovať iba na čítanie</button>
+        <div class="banner-actions"><button id="auth-button" class="button button-tertiary" type="button" hidden>Prihlásiť pre zápis</button><button id="sync-button" class="button button-tertiary" type="button">Synchronizovať iba na čítanie</button></div>
       </div>
       <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
@@ -91,6 +91,15 @@
       </section>
     </main>
   </div>
+
+  <dialog id="auth-modal" aria-labelledby="auth-modal-title">
+    <form id="auth-form" method="dialog" autocomplete="off" novalidate>
+      <div class="modal-heading"><div><p class="eyebrow">CHRÁNENÉ OPERÁCIE</p><h2 id="auth-modal-title">Prihlásenie pre zápis</h2></div><button class="icon-button auth-close" type="button" aria-label="Zavrieť">×</button></div>
+      <div id="auth-form-error" class="form-error" role="alert" hidden></div>
+      <div class="form-grid"><div class="field field-full"><label for="auth-token">Write token</label><input id="auth-token" type="password" autocomplete="off" required><p class="field-help">Aplikácia token neukladá a po zatvorení dialógu ho vymaže z poľa.</p></div></div>
+      <div class="modal-actions"><button class="button button-secondary auth-close" type="button">Zrušiť</button><button id="auth-submit" class="button button-primary" type="submit">Prihlásiť</button></div>
+    </form>
+  </dialog>
 
   <dialog id="product-modal" aria-labelledby="product-modal-title">
     <form id="product-form" method="dialog" novalidate>

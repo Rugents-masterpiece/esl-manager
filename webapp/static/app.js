@@ -77,6 +77,8 @@ async function api(path, options = {}) {
   if (!response.ok) {
     const error = new Error(payload && payload.error ? payload.error.message : `Požiadavka zlyhala (${response.status})`);
     error.payload = payload;
+    error.status = response.status;
+    if (response.status === 401 && path !== "/api/session") openAuthModal();
     throw error;
   }
   return payload;
@@ -87,6 +89,44 @@ function notify(message, isError = false) {
   const toast = element("div", { className: `toast${isError ? " error" : ""}`, text: message });
   region.replaceChildren(toast);
   window.setTimeout(() => { if (toast.isConnected) toast.remove(); }, 5000);
+}
+
+function openAuthModal() {
+  byId("auth-form").reset();
+  byId("auth-form-error").hidden = true;
+  if (!byId("auth-modal").open) byId("auth-modal").showModal();
+  byId("auth-token").focus();
+}
+
+function closeAuthModal() {
+  byId("auth-form").reset();
+  byId("auth-form-error").hidden = true;
+  if (byId("auth-modal").open) byId("auth-modal").close();
+}
+
+async function authenticateForWrites(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) return;
+  const submit = byId("auth-submit");
+  const token = byId("auth-token");
+  submit.disabled = true;
+  submit.textContent = "Prihlasujem…";
+  byId("auth-form-error").hidden = true;
+  try {
+    await api("/api/session", { method: "POST", body: JSON.stringify({ token: token.value }) });
+    closeAuthModal();
+    byId("auth-button").textContent = "Zápis prihlásený";
+    notify("Prihlásenie pre write operácie bolo úspešné.");
+  } catch (error) {
+    const errorBox = byId("auth-form-error");
+    errorBox.textContent = `Prihlásenie zlyhalo: ${error.message}`;
+    errorBox.hidden = false;
+  } finally {
+    token.value = "";
+    submit.disabled = false;
+    submit.textContent = "Prihlásiť";
+  }
 }
 
 function renderTable(targetId, headers, rows) {
@@ -118,6 +158,7 @@ function setConnection(ok) {
 function setOperatingMode(health) {
   const live = health.mode === "live";
   const readOnly = health.mode === "read_only";
+  byId("auth-button").hidden = !(live || readOnly);
   byId("mode-label").textContent = live ? "LIVE" : (readOnly ? "Read-only" : "Simulácia");
   byId("mode-title").textContent = live ? "LIVE režim" : (readOnly ? "Reálny server — iba na čítanie" : "Simulačný režim");
   byId("mode-description").textContent = live
@@ -507,6 +548,10 @@ function bindEvents() {
     byId("mobile-nav-toggle").setAttribute("aria-expanded", String(open));
   });
   byId("sync-button").addEventListener("click", readOnlySync);
+  byId("auth-button").addEventListener("click", openAuthModal);
+  byId("auth-form").addEventListener("submit", authenticateForWrites);
+  document.querySelectorAll(".auth-close").forEach((button) => button.addEventListener("click", closeAuthModal));
+  byId("auth-modal").addEventListener("cancel", () => byId("auth-form").reset());
   document.querySelectorAll(".refresh-view").forEach((button) => button.addEventListener("click", () => viewLoaders[state.activeView]()));
   byId("tag-filters").addEventListener("submit", (event) => { event.preventDefault(); loadTags(); });
   byId("tags-table").addEventListener("change", (event) => {
@@ -535,6 +580,7 @@ function bindEvents() {
     if (button.dataset.action === "simulate-failure") processJob(button.dataset.id, true);
     if (button.dataset.action === "retry") retryJob(button.dataset.id);
   });
+  byId("auth-modal").addEventListener("click", (event) => { if (event.target === byId("auth-modal")) closeAuthModal(); });
   [byId("product-modal"), byId("binding-modal")].forEach((dialog) => dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); }));
 }
 

@@ -48,14 +48,15 @@ Simulačný režim používa bežný štart opísaný vyššie. Live režim pou�
 python3 run_live.py
 ```
 
-Launcher nenačítava heslo do príkazového riadka, nepridáva demo dáta a zapne procesový write gate iba vtedy, keď JSON obsahuje `"live_writes": true`. Pri bindovaní na LAN sú všetky API mutácie vrátane synchronizácie povolené iba z loopbacku; vzdialené LAN rozhranie je read-only. Synchronizácia načíta všetky strany zoznamu cenoviek.
+Launcher nenačítava heslo do príkazového riadka, nepridáva demo dáta a zapne procesový write gate iba vtedy, keď JSON obsahuje `"live_writes": true`. Súbor musí obsahovať aj náhodný `api_token` v 64-znakovom URL-safe formáte generovanom zo 48 náhodných bajtov. Pri bindovaní na LAN vyžadujú všetky API mutácie prihlásenie týmto tokenom cez tlačidlo „Prihlásiť pre zápis“. Aplikácia token neukladá a po zatvorení dialógu vyčistí vstupné pole; backend vydá osemhodinovú `HttpOnly`, `SameSite=Strict` session cookie. Synchronizácia načíta všetky strany zoznamu cenoviek.
 
 Konfiguráciu možno naďalej vytvoriť priamo z prostredia cez `ESL_BASE_URL`, voliteľné prihlasovacie údaje/session a timeouty.
 
 Fyzické zápisy sú predvolene zakázané. Endpoint pre live dispatch vyžaduje súčasne:
 
 1. administrátorské nastavenie `ESL_LIVE_WRITES=1`,
-2. presnú potvrdzovaciu frázu v konkrétnej požiadavke,
-3. úspešný read-back stavu cenovky.
+2. platnú autentifikovanú write session,
+3. presnú potvrdzovaciu frázu v konkrétnej požiadavke,
+4. známy stav cenovky pred operáciou a preukázanú zmenu pri následnom read-backu.
 
 Aplikácia neposkytuje ovládanie na fyzické mazanie. Podrobnosti sú v `SECURITY.md`; analyzované zdroje a rozhodnutia sú v nadradenom `ANALYSIS.md`.

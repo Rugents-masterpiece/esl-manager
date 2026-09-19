@@ -10,17 +10,19 @@ ESL Manager is a local operations tool. Its default runtime is a demo/simulation
 
 ## Live-write controls
 
-A physical display update is denied unless both conditions are true:
+A physical display update is denied unless all conditions are true:
 
 - process environment contains `ESL_LIVE_WRITES=1`;
-- the request includes the exact explicit confirmation expected by the backend.
+- the caller has a valid write session created with the deployment's high-entropy API token;
+- the request includes the exact explicit confirmation expected by the backend;
+- the pre-write state is known and post-write read-back observes a relevant state transition.
 
-The default is deny. Read-only sync and simulated job processing are separate operations. Physical delete endpoints are not exposed.
+The default is deny. Every API mutation requires authentication when an API token is configured. Session cookies are `HttpOnly` and `SameSite=Strict`, expire after an absolute eight hours, and browser-origin mutations must match the request host. The in-memory session store is capped at 128 entries. Read-only sync and simulated job processing are separate operations. Physical delete endpoints are not exposed.
 
 ## Deployment assumptions
 
 - Bind to `127.0.0.1` unless the operator explicitly chooses LAN exposure.
-- LAN exposure requires an authenticated reverse proxy and network firewall; the built-in server does not provide user authentication or TLS.
+- The live launcher enables built-in token-to-session authentication, but it does not provide TLS. Use only on a trusted, firewalled LAN or place it behind an HTTPS reverse proxy; the login token otherwise travels over plain HTTP.
 - Do not expose the application to the public Internet.
 - Rotate legacy ESL credentials before enabling integration because historical research files contain test credentials/session material.
 
