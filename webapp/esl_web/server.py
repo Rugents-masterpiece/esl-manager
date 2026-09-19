@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import mimetypes
 import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,10 +33,12 @@ class EslHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], handler, service: Service,
-                 vendor_client: VendorClient | None = None):
+                 vendor_client: VendorClient | None = None,
+                 static_root: Path | None = None):
         super().__init__(address, handler)
         self.service = service
         self.vendor_client = vendor_client
+        self.static_root = (static_root or Path(__file__).resolve().parent.parent / "static").resolve()
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -117,6 +120,32 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+
+    def _static_file(self, request_path: str) -> bool:
+        """Serve only files contained by the configured static directory."""
+        server = cast(EslHTTPServer, self.server)
+        relative = "index.html" if request_path == "/" else unquote(request_path).removeprefix("/static/")
+        if request_path != "/" and not request_path.startswith("/static/"):
+            return False
+        candidate = (server.static_root / relative).resolve()
+        try:
+            candidate.relative_to(server.static_root)
+        except ValueError:
+            return False
+        if not candidate.is_file():
+            return False
+        content = candidate.read_bytes()
+        content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        if candidate.suffix == ".js":
+            content_type = "text/javascript"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(content)
+        return True
 
     def _mutation(self, method: str) -> None:
         try:
@@ -214,7 +243,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             path = split.path.rstrip("/") or "/"
             query = parse_qs(split.query, keep_blank_values=True)
             service = cast(EslHTTPServer, self.server).service
-            if path == "/api/health":
+            if path == "/" or path.startswith("/static/"):
+                if not self._static_file(split.path):
+                    raise NotFoundError("Route not found")
+            elif path == "/api/health":
                 self._json(HTTPStatus.OK, {"mode": "simulation", "status": "ok"})
             elif path == "/api/dashboard":
                 self._json(HTTPStatus.OK, service.dashboard())
@@ -273,7 +305,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 def create_server(host: str = "127.0.0.1", port: int = 0, *,
                   database_path: str | Path | None = None, seed: bool = True,
                   service: Service | None = None,
-                  vendor_client: VendorClient | None = None) -> EslHTTPServer:
+                  vendor_client: VendorClient | None = None,
+                  static_root: str | Path | None = None) -> EslHTTPServer:
     """Create, but do not start, a threaded API server."""
     if service is None:
         if database_path is None:
@@ -283,4 +316,5 @@ def create_server(host: str = "127.0.0.1", port: int = 0, *,
         if seed:
             storage.seed_demo()
         service = Service(storage)
-    return EslHTTPServer((host, port), ApiHandler, service, vendor_client)
+    root = Path(static_root) if static_root is not None else None
+    return EslHTTPServer((host, port), ApiHandler, service, vendor_client, root)

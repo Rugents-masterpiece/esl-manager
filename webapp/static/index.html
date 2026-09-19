@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>ESL Manager — Prevádzkový panel</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Preskočiť na obsah</a>
+  <div id="app-shell">
+    <header class="masthead">
+      <button id="mobile-nav-toggle" class="icon-button menu-button" type="button" aria-controls="primary-nav" aria-expanded="false" aria-label="Otvoriť navigáciu"><span aria-hidden="true">☰</span></button>
+      <a class="brand" href="#overview" aria-label="ESL Manager — domov"><strong>ESL</strong><span>Manager</span></a>
+      <span class="environment">LOKÁLNA PREVÁDZKA</span>
+      <div class="masthead-status"><span class="status-dot" aria-hidden="true"></span><span id="app-status">Pripájam…</span></div>
+    </header>
+
+    <aside id="primary-nav" class="side-nav" aria-label="Hlavná navigácia">
+      <nav>
+        <a href="#overview" data-view="overview" aria-current="page"><span aria-hidden="true">▦</span>Prehľad</a>
+        <a href="#tags" data-view="tags"><span aria-hidden="true">▤</span>Cenovky</a>
+        <a href="#products" data-view="products"><span aria-hidden="true">◇</span>Produkty</a>
+        <a href="#templates" data-view="templates"><span aria-hidden="true">▣</span>Šablóny</a>
+        <a href="#routers" data-view="routers"><span aria-hidden="true">⌁</span>Stanice</a>
+        <a href="#jobs" data-view="jobs"><span aria-hidden="true">↻</span>Úlohy</a>
+        <a href="#audit" data-view="audit"><span aria-hidden="true">≡</span>Audit</a>
+      </nav>
+      <div class="nav-footer"><span>Režim</span><strong>Simulácia</strong></div>
+    </aside>
+
+    <main id="main-content" tabindex="-1">
+      <div id="safety-banner" class="safety-banner" role="status">
+        <div><strong>Simulačný režim</strong><span> Zmeny sú lokálne. Žiadny zápis sa neposiela na fyzické ESL zariadenia.</span></div>
+        <button id="sync-button" class="button button-tertiary" type="button">Synchronizovať iba na čítanie</button>
+      </div>
+      <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+      <section id="view-overview" class="view" data-view-panel="overview" aria-labelledby="overview-title">
+        <div class="page-heading"><div><p class="eyebrow">PREVÁDZKA PREDAJNE</p><h1 id="overview-title">Prehľad</h1><p>Aktuálny stav elektronických cenoviek a lokálnych operácií.</p></div><button class="button button-secondary refresh-view" type="button">Obnoviť údaje</button></div>
+        <div id="overview-state" class="state-message" role="status">Načítavam prehľad…</div>
+        <div id="kpi-grid" class="kpi-grid" aria-label="Kľúčové ukazovatele"></div>
+        <div class="dashboard-grid">
+          <article class="panel"><div class="panel-heading"><h2>Kritické alerty</h2><a href="#audit">Zobraziť audit</a></div><div id="overview-alerts"></div></article>
+          <article class="panel"><div class="panel-heading"><h2>Posledné úlohy</h2><a href="#jobs">Všetky úlohy</a></div><div id="overview-jobs"></div></article>
+        </div>
+      </section>
+
+      <section id="view-tags" class="view" data-view-panel="tags" aria-labelledby="tags-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">INVENTÁR</p><h1 id="tags-title">Cenovky</h1><p>Vyhľadávanie, filtre, väzby a hromadné aktualizácie.</p></div><button id="create-job-button" class="button button-primary" type="button" disabled>Vytvoriť update job</button></div>
+        <form id="tag-filters" class="filter-bar" role="search">
+          <div class="field field-grow"><label for="tag-search">MAC alebo produkt</label><input id="tag-search" name="search" type="search" autocomplete="off" placeholder="Hľadať cenovku"></div>
+          <div class="field"><label for="tag-status">Stav</label><select id="tag-status" name="status"><option value="">Všetky</option><option value="ready">Pripravená</option><option value="updating">Aktualizuje sa</option><option value="success">Úspešná</option><option value="failed">Chyba</option></select></div>
+          <div class="field"><label for="tag-battery">Batéria</label><select id="tag-battery" name="battery"><option value="">Všetky</option><option value="low">Nízka (≤ 20 %)</option><option value="ok">V poriadku</option></select></div>
+          <div class="field"><label for="tag-router">Stanica</label><select id="tag-router" name="router"><option value="">Všetky</option></select></div>
+          <button class="button button-secondary filter-submit" type="submit">Použiť</button>
+        </form>
+        <div class="selection-bar"><span id="selected-count">Vybrané: 0</span><button id="clear-selection" class="link-button" type="button">Zrušiť výber</button></div>
+        <div id="tags-state" class="state-message" role="status">Načítavam cenovky…</div>
+        <div id="tags-table" class="table-wrap"></div>
+      </section>
+
+      <section id="view-products" class="view" data-view-panel="products" aria-labelledby="products-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">KATALÓG</p><h1 id="products-title">Produkty</h1><p>Lokálna správa produktov a väzieb na cenovky.</p></div><div class="heading-actions"><a class="button button-secondary" href="/api/products/export.csv" download>Exportovať CSV</a><button id="add-product" class="button button-primary" type="button">Pridať produkt</button></div></div>
+        <form id="product-search-form" class="filter-bar" role="search"><div class="field field-grow"><label for="product-search">SKU, EAN alebo názov</label><input id="product-search" type="search" placeholder="Hľadať produkt"></div><button class="button button-secondary filter-submit" type="submit">Hľadať</button></form>
+        <div id="products-state" class="state-message" role="status">Načítavam produkty…</div>
+        <div id="products-table" class="table-wrap"></div>
+      </section>
+
+      <section id="view-templates" class="view" data-view-panel="templates" aria-labelledby="templates-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">VZHĽAD</p><h1 id="templates-title">Šablóny</h1><p>Read-only prehľad rozložení dostupných pre cenovky.</p></div><span class="read-only-badge">IBA NA ČÍTANIE</span></div>
+        <div id="templates-state" class="state-message" role="status">Načítavam šablóny…</div><div id="templates-grid" class="card-grid"></div>
+      </section>
+
+      <section id="view-routers" class="view" data-view-panel="routers" aria-labelledby="routers-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">INFRAŠTRUKTÚRA</p><h1 id="routers-title">Stanice</h1><p>Stav routerov a pripojených cenoviek.</p></div></div>
+        <div id="routers-state" class="state-message" role="status">Načítavam stanice…</div><div id="routers-grid" class="card-grid"></div>
+      </section>
+
+      <section id="view-jobs" class="view" data-view-panel="jobs" aria-labelledby="jobs-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">SPRACOVANIE</p><h1 id="jobs-title">Úlohy</h1><p>Simulované spracovanie a opakovanie neúspešných položiek.</p></div><span class="simulation-chip">SIMULÁCIA — BEZ LIVE ZÁPISU</span></div>
+        <div id="jobs-state" class="state-message" role="status">Načítavam úlohy…</div><div id="jobs-list" class="stack"></div>
+      </section>
+
+      <section id="view-audit" class="view" data-view-panel="audit" aria-labelledby="audit-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">HISTÓRIA</p><h1 id="audit-title">Audit</h1><p>Nemenný záznam lokálnych operácií a alertov.</p></div><span class="read-only-badge">IBA NA ČÍTANIE</span></div>
+        <div class="dashboard-grid"><article class="panel"><div class="panel-heading"><h2>Aktívne alerty</h2></div><div id="alerts-list"></div></article><article class="panel"><div class="panel-heading"><h2>Audit udalostí</h2></div><div id="audit-state" class="state-message" role="status">Načítavam audit…</div><div id="audit-list"></div></article></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="product-modal" aria-labelledby="product-modal-title">
+    <form id="product-form" method="dialog" novalidate>
+      <div class="modal-heading"><div><p class="eyebrow">LOKÁLNY KATALÓG</p><h2 id="product-modal-title">Pridať produkt</h2></div><button class="icon-button modal-close" type="button" aria-label="Zavrieť">×</button></div>
+      <div id="product-form-error" class="form-error" role="alert" hidden></div>
+      <input id="product-id" type="hidden">
+      <div class="form-grid">
+        <div class="field"><label for="product-sku">SKU <span aria-hidden="true">*</span></label><input id="product-sku" required maxlength="200"></div>
+        <div class="field"><label for="product-ean">EAN</label><input id="product-ean" maxlength="200"></div>
+        <div class="field field-full"><label for="product-name">Názov <span aria-hidden="true">*</span></label><input id="product-name" required maxlength="200"></div>
+        <div class="field"><label for="product-price">Cena v EUR <span aria-hidden="true">*</span></label><input id="product-price" type="number" min="0" step="0.01" required></div>
+        <div class="field"><label for="product-template">Šablóna</label><select id="product-template"><option value="">Bez šablóny</option></select></div>
+      </div>
+      <div class="modal-actions"><button class="button button-secondary modal-close" type="button">Zrušiť</button><button id="save-product" class="button button-primary" type="submit">Uložiť produkt</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="binding-modal" aria-labelledby="binding-title">
+    <form id="binding-form" method="dialog">
+      <div class="modal-heading"><div><p class="eyebrow">VÄZBA</p><h2 id="binding-title">Priradiť cenovku</h2></div><button class="icon-button binding-close" type="button" aria-label="Zavrieť">×</button></div>
+      <input id="binding-product-id" type="hidden">
+      <div class="field"><label for="binding-tag">Voľná cenovka</label><select id="binding-tag" required></select></div>
+      <div class="modal-actions"><button class="button button-secondary binding-close" type="button">Zrušiť</button><button class="button button-primary" type="submit">Priradiť</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
