@@ -42,7 +42,15 @@ Testy vendor integrácie používajú iba lokálny fake HTTP server; nekontaktuj
 
 ## Vendor synchronizácia a bezpečnosť
 
-Konfigurácia vendor pripojenia sa načítava z prostredia, najmä `ESL_BASE_URL`, voliteľných prihlasovacích údajov/session a timeoutov. UI ponúka iba read-only synchronizáciu inventára.
+Simulačný režim používa bežný štart opísaný vyššie. Live režim používa ignorovaný súbor `data/live-credentials.json` s oprávneniami `0600` a spúšťa sa:
+
+```bash
+python3 run_live.py
+```
+
+Launcher nenačítava heslo do príkazového riadka, nepridáva demo dáta a zapne procesový write gate iba vtedy, keď JSON obsahuje `"live_writes": true`. Pri bindovaní na LAN sú všetky API mutácie vrátane synchronizácie povolené iba z loopbacku; vzdialené LAN rozhranie je read-only. Synchronizácia načíta všetky strany zoznamu cenoviek.
+
+Konfiguráciu možno naďalej vytvoriť priamo z prostredia cez `ESL_BASE_URL`, voliteľné prihlasovacie údaje/session a timeouty.
 
 Fyzické zápisy sú predvolene zakázané. Endpoint pre live dispatch vyžaduje súčasne:
 

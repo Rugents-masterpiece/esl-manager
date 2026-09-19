@@ -115,13 +115,26 @@ function setConnection(ok) {
   document.querySelector(".status-dot").classList.toggle("error", !ok);
 }
 
+function setOperatingMode(health) {
+  const live = health.mode === "live";
+  const readOnly = health.mode === "read_only";
+  byId("mode-label").textContent = live ? "LIVE" : (readOnly ? "Read-only" : "Simulácia");
+  byId("mode-title").textContent = live ? "LIVE režim" : (readOnly ? "Reálny server — iba na čítanie" : "Simulačný režim");
+  byId("mode-description").textContent = live
+    ? " Fyzické zápisy sú povolené iba s explicitným potvrdením každej požiadavky."
+    : (readOnly ? " Inventár pochádza z reálneho ESL servera. Fyzické zápisy sú vypnuté."
+      : " Zmeny sú lokálne. Žiadny zápis sa neposiela na fyzické ESL zariadenia.");
+  byId("safety-banner").classList.toggle("live", live);
+}
+
 async function loadOverview() {
   setState("overview-state", "Načítavam prehľad…");
   byId("kpi-grid").replaceChildren();
   try {
-    const [dashboard, alertsResult, jobsResult, tagsResult] = await Promise.all([
-      api("/api/dashboard"), api("/api/alerts?active=true"), api("/api/jobs"), api("/api/tags"),
+    const [health, dashboard, alertsResult, jobsResult, tagsResult] = await Promise.all([
+      api("/api/health"), api("/api/dashboard"), api("/api/alerts?active=true"), api("/api/jobs"), api("/api/tags"),
     ]);
+    setOperatingMode(health);
     const lowBattery = tagsResult.items.filter((tag) => Number(tag.battery) <= 20).length;
     const metrics = [
       ["Cenovky", dashboard.tags, `${dashboard.bound_tags} priradených`],
@@ -131,7 +144,7 @@ async function loadOverview() {
       ["Otvorené alerty", dashboard.active_alerts, "vyžadujú pozornosť"],
       ["Čakajúce úlohy", dashboard.queued_jobs, "vo fronte alebo v behu"],
       ["Stanice", dashboard.routers, `${dashboard.offline_routers} offline`],
-      ["Režim", "SIM", "bez fyzických zápisov"],
+      ["Režim", health.mode === "live" ? "LIVE" : (health.mode === "read_only" ? "READ" : "SIM"), health.mode === "live" ? "zápis vyžaduje potvrdenie" : "bez fyzických zápisov"],
     ];
     byId("kpi-grid").replaceChildren(...metrics.map(([label, value, meta]) => element("article", { className: "kpi" }, [
       element("span", { className: "kpi-label", text: label }), element("strong", { className: "kpi-value", text: value }), element("span", { className: "kpi-meta", text: meta }),

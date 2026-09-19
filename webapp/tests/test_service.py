@@ -2,11 +2,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from esl_web.service import ConflictError, NotFoundError, Service, ValidationError
+from esl_web.service import ConflictError, IntegrationError, NotFoundError, Service, ValidationError
 from esl_web.storage import Storage
 
 
 class ServiceTests(unittest.TestCase):
+    def test_vendor_integer_value_rejects_ambiguous_or_invalid_numbers(self):
+        for value in (True, 1.5, "1.5", "invalid", float("inf"), 1e100,
+                      str(2**63), str(-(2**63) - 1)):
+            with self.subTest(value=value), self.assertRaises(IntegrationError):
+                Service._vendor_integer_value(value, "field", minimum=1)
+        self.assertEqual(Service._vendor_integer_value("5", "field", minimum=1), 5)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.storage = Storage(Path(self.temporary.name) / "esl.db")

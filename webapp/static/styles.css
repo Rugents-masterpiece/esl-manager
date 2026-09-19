@@ -60,6 +60,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 main { min-height: 100vh; margin-left: var(--side-width); padding-top: 48px; }
 .safety-banner { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 8px 32px; color: #3d2f00; background: #fff8e1; border-bottom: 1px solid #d2a106; font-size: 13px; }
 .safety-banner strong { display: inline-block; margin-right: 5px; }
+.safety-banner.live { color: #5c0f0f; background: #fff1f1; border-bottom-color: #da1e28; }
 .view { max-width: 1500px; margin: 0 auto; padding: 32px; }
 .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 32px; }
 h1, h2, h3, p { margin-top: 0; }

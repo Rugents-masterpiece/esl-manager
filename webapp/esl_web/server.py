@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import ipaddress
 import io
 import json
 import mimetypes
@@ -27,6 +28,13 @@ from .vendor import VendorClient, VendorConfig, VendorConfigurationError, live_w
 
 def _reject_json_constant(_value: str) -> None:
     raise ValueError("non-standard JSON number")
+
+
+def _is_loopback_address(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
 
 
 class EslHTTPServer(ThreadingHTTPServer):
@@ -152,6 +160,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path.rstrip("/") or "/"
             service = cast(EslHTTPServer, self.server).service
             server = cast(EslHTTPServer, self.server)
+            if not _is_loopback_address(self.client_address[0]):
+                self.close_connection = True
+                raise ForbiddenError("API mutations are restricted to the local host")
             if method == "POST" and path == "/api/sync/read-only":
                 if self._body() != {}:
                     raise ValidationError("Read-only sync body must be an empty object")
@@ -163,6 +174,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                         raise IntegrationError("Vendor integration is not configured") from error
                 self._json(HTTPStatus.OK, service.sync_read_only(client))
             elif method == "POST" and path == "/api/dispatch/live":
+                if not _is_loopback_address(self.client_address[0]):
+                    self.close_connection = True
+                    raise ForbiddenError("Live ESL writes are restricted to the local host")
                 if os.environ.get("ESL_LIVE_WRITES") != "1":
                     self.close_connection = True
                     raise ForbiddenError("Live ESL writes are disabled or not explicitly confirmed")
@@ -242,12 +256,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             split = urlsplit(self.path)
             path = split.path.rstrip("/") or "/"
             query = parse_qs(split.query, keep_blank_values=True)
-            service = cast(EslHTTPServer, self.server).service
+            server = cast(EslHTTPServer, self.server)
+            service = server.service
             if path == "/" or path.startswith("/static/"):
                 if not self._static_file(split.path):
                     raise NotFoundError("Route not found")
             elif path == "/api/health":
-                self._json(HTTPStatus.OK, {"mode": "simulation", "status": "ok"})
+                if os.environ.get("ESL_LIVE_WRITES") == "1":
+                    mode = "live"
+                else:
+                    mode = "read_only" if server.vendor_client is not None else "simulation"
+                self._json(HTTPStatus.OK, {"mode": mode, "status": "ok"})
             elif path == "/api/dashboard":
                 self._json(HTTPStatus.OK, service.dashboard())
             elif path == "/api/products":

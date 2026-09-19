@@ -17,6 +17,7 @@ from esl_web.vendor import (
     VendorClient,
     VendorConfig,
     VendorConfigurationError,
+    VendorError,
     decode_response,
 )
 
@@ -38,6 +39,27 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(decode_response('čaj'.encode()), "čaj")
         with self.assertRaises(ValueError):
             decode_response(b"\xff")
+
+
+class PaginationTests(unittest.TestCase):
+    def test_update_status_rejects_non_finite_and_out_of_range_values(self):
+        client = VendorClient(VendorConfig(base_url="http://127.0.0.1/esls_new"))
+        for value in (float("inf"), float("nan"), 1e100, "999", True, "2.5"):
+            with self.subTest(value=value):
+                self.assertIsNone(client._update_status({"updateProgress": value}))
+
+    def test_tag_inventory_fetches_all_pages_without_duplicating_page_zero(self):
+        client = VendorClient(VendorConfig(base_url="http://192.0.2.1/esls_new"))
+        first = [{"mac": str(index)} for index in range(10)]
+        second = [{"mac": str(index)} for index in range(10, 13)]
+        with patch.object(client, "_request", side_effect=[first, second, []]) as request_call, \
+             patch("esl_web.vendor.time.sleep") as sleep_call:
+            tags = client.get_tags()
+        self.assertEqual(len(tags), 13)
+        self.assertIn("currentPage=1", request_call.call_args_list[0].args[1])
+        self.assertIn("currentPage=2", request_call.call_args_list[1].args[1])
+        self.assertIn("currentPage=3", request_call.call_args_list[2].args[1])
+        self.assertEqual(sleep_call.call_count, 2)
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -77,6 +99,8 @@ class ConfigurationTests(unittest.TestCase):
             VendorConfig("file:///tmp/controller")
         with self.assertRaises(VendorConfigurationError):
             VendorConfig("http://127.0.0.1/esls_new", connect_timeout=0)
+        with self.assertRaises(VendorConfigurationError):
+            VendorConfig("http://127.0.0.1/esls_new", username=123, password="secret")
 
 
 class FakeVendorHandler(BaseHTTPRequestHandler):
@@ -84,6 +108,8 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
     update_status = 200
     expected_updates = []
     tag_status = 1
+    updated_tag_status = 4
+    login_authenticated = True
 
     def log_message(self, format, *args):
         return
@@ -104,7 +130,7 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
         self.__class__.calls.append(("POST", self.path, self.headers.get("Cookie"), body))
         if self.path == "/esls_new/login/userLogin":
             self.assert_login(body)
-            self._send("true", cookie="JSESSIONID=fake-login; Path=/esls_new; HttpOnly")
+            self._send('<html><a href="login/logout">logout</a></html>', cookie="JSESSIONID=fake-login; Path=/esls_new; HttpOnly")
             return
         if self.path == "/esls_new/associate/updateScreen":
             if self.headers.get("Cookie") != "JSESSIONID=fake-login":
@@ -116,6 +142,7 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
             if self.__class__.update_status == 500:
                 self.send_error(500)
                 return
+            self.__class__.tag_status = self.__class__.updated_tag_status
             self._send("true")
             return
         self.send_error(404)
@@ -123,32 +150,40 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
     def assert_login(self, body):
         values = parse_qs(body.decode())
         expected = hashlib.md5(b"secret").hexdigest()
-        if values != {"username": ["operator"], "passwd": [expected]}:
+        if values != {"name": ["operator"], "passwd": [expected]}:
             self.send_error(400)
             raise AssertionError(values)
 
     def do_GET(self):
         self.__class__.calls.append(("GET", self.path, self.headers.get("Cookie"), b""))
+        if not self.__class__.login_authenticated:
+            self.send_error(401)
+            return
         if self.headers.get("Cookie") != "JSESSIONID=fake-login":
             self.send_error(401)
             return
-        if self.path == "/esls_new/associate/getRoutersMsg":
-            self._send(json.dumps([{
-                "routerID": 8, "routerIP": "127.0.0.8", "state": 1,
-                "lastHeartbeatTime": 1579163376000,
-            }]))
-        elif self.path == "/esls_new/associate/getStyleMsgs":
+        if self.path == "/esls_new/mms/queryRouters?currentPage=0&routerId=0":
             self._send(json.dumps({"datalist": [{
-                "id": 136, "name": "Vendor template", "width": 296,
-                "height": 128, "mappingtype": 101,
-            }], "resultCode": 10}))
-        elif self.path == "/esls_new/associate/getTagsMsg":
-            tags = [{
-                "mac": "92.91.87.80", "power": 100, "rssi": -54.0,
-                "status": self.__class__.tag_status, "routerid": "8", "styleId": 136,
-                "width": 296, "height": 128, "showStyle": "Vendor template",
-            }]
-            self._send(json.dumps(json.dumps(tags)))
+                "id": "98", "mac": "1", "ip": "127.0.0.8", "state": "true",
+                "shopName": "Test shop", "description": "Test router",
+            }], "resultCode": 1}))
+        elif self.path == "/esls_new/mms/queryStyles?currentPage=0&templateType=0":
+            self._send(json.dumps({"datalist": [
+                {"id": "136", "name": "Vendor template", "styleLen": "296x128"},
+                {"id": "138", "name": "Vendor template (137)", "styleLen": "296x128"},
+                {"id": "137", "name": "Vendor template", "styleLen": "296x128"},
+            ], "resultCode": 1}))
+        elif self.path.startswith("/esls_new/mms/queryTags?"):
+            if "currentPage=2" in self.path:
+                self._send(json.dumps({"datalist": [], "resultCode": 1}))
+                return
+            self._send(json.dumps({"datalist": [{
+                "id": "7", "mac": "92.91.87.80", "power": "100",
+                "state": "true" if self.__class__.tag_status in {1, 2, 4} else "false",
+                "routerMac": "1", "styleName": "Vendor template",
+                "name": "Test tag", "status": "1",
+                "updateProgress": str(self.__class__.tag_status),
+            }], "resultCode": 1}))
         else:
             self.send_error(404)
 
@@ -159,6 +194,8 @@ class ReadOnlySyncTests(unittest.TestCase):
         FakeVendorHandler.update_status = 200
         FakeVendorHandler.expected_updates = []
         FakeVendorHandler.tag_status = 1
+        FakeVendorHandler.updated_tag_status = 4
+        FakeVendorHandler.login_authenticated = True
         self.vendor_server = ThreadingHTTPServer(("127.0.0.1", 0), FakeVendorHandler)
         self.vendor_thread = threading.Thread(target=self.vendor_server.serve_forever, daemon=True)
         self.vendor_thread.start()
@@ -186,6 +223,11 @@ class ReadOnlySyncTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_loopback_sync_logs_in_and_upserts_inventory(self):
+        FakeVendorHandler.tag_status = 4
+        with patch.dict(os.environ, {}, clear=True), urlopen(
+            self.app_base + "/api/health", timeout=2
+        ) as response:
+            self.assertEqual(json.loads(response.read())["mode"], "read_only")
         request = Request(
             self.app_base + "/api/sync/read-only", data=b"{}", method="POST",
             headers={"Content-Type": "application/json"},
@@ -193,13 +235,13 @@ class ReadOnlySyncTests(unittest.TestCase):
         with urlopen(request, timeout=2) as response:
             result = json.loads(response.read())
             self.assertEqual(response.status, 200)
-        self.assertEqual(result["synced"], {"routers": 1, "tags": 1, "templates": 1})
+        self.assertEqual(result["synced"], {"routers": 1, "tags": 1, "templates": 3})
 
         with urlopen(self.app_base + "/api/tags", timeout=2) as response:
             tag = json.loads(response.read())["items"][0]
         self.assertEqual(tag["id"], "92.91.87.80")
-        self.assertEqual(tag["status"], "ready")
-        self.assertEqual(tag["router_id"], "8")
+        self.assertEqual(tag["status"], "success")
+        self.assertEqual(tag["router_id"], "1")
         self.assertEqual(tag["template_id"], "136")
         self.assertEqual(FakeVendorHandler.calls[0][1], "/esls_new/login/userLogin")
         self.assertTrue(all(call[2] == "JSESSIONID=fake-login" for call in FakeVendorHandler.calls[1:]))
@@ -210,6 +252,15 @@ class ReadOnlySyncTests(unittest.TestCase):
             data=json.dumps(body).encode(), method="POST",
             headers={"Content-Type": "application/json"},
         )
+
+    def test_login_html_and_cookie_are_not_enough_without_authenticated_probe(self):
+        FakeVendorHandler.login_authenticated = False
+        client = VendorClient(VendorConfig(
+            base_url=self.client.config.base_url, username="operator", password="secret"
+        ))
+        with self.assertRaises(VendorError):
+            client.get_routers()
+        self.assertFalse(client._logged_in)
 
     def test_live_dispatch_is_deterministically_denied_without_both_guards(self):
         updates = [{
@@ -263,7 +314,7 @@ class ReadOnlySyncTests(unittest.TestCase):
             "ABDisplayFlag": 163, "Price": "9.99",
         }]
         FakeVendorHandler.expected_updates = updates
-        FakeVendorHandler.tag_status = 4
+        FakeVendorHandler.tag_status = 1
         body = {"confirmation": LIVE_WRITE_CONFIRMATION, "updates": updates}
         with patch.dict(os.environ, {"ESL_LIVE_WRITES": "1"}, clear=True):
             with urlopen(self._dispatch_request(body), timeout=2) as response:
@@ -275,9 +326,28 @@ class ReadOnlySyncTests(unittest.TestCase):
         })
         self.assertEqual(
             [call[1] for call in FakeVendorHandler.calls],
-            ["/esls_new/login/userLogin", "/esls_new/associate/updateScreen",
-             "/esls_new/associate/getTagsMsg"],
+            ["/esls_new/login/userLogin",
+             "/esls_new/mms/queryRouters?currentPage=0&routerId=0",
+             "/esls_new/mms/queryTags?currentPage=1&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+             "/esls_new/mms/queryTags?currentPage=2&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+             "/esls_new/associate/updateScreen",
+             "/esls_new/mms/queryTags?currentPage=1&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+             "/esls_new/mms/queryTags?currentPage=2&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0"],
         )
+
+    def test_dispatch_rejects_stale_success_status_as_unverified(self):
+        updates = [{"mac": "92.91.87.80", "styleid": 136, "mappingtype": 101,
+                    "ABDisplayFlag": 163}]
+        FakeVendorHandler.expected_updates = updates
+        FakeVendorHandler.tag_status = 4
+        FakeVendorHandler.updated_tag_status = 4
+        body = {"confirmation": LIVE_WRITE_CONFIRMATION, "updates": updates}
+        with patch.dict(os.environ, {"ESL_LIVE_WRITES": "1"}, clear=True), \
+             self.assertRaises(HTTPError) as caught:
+            urlopen(self._dispatch_request(body), timeout=2)
+        self.assertEqual(caught.exception.code, 502)
+        self.assertEqual(json.loads(caught.exception.read())["error"]["code"], "vendor_error")
+        caught.exception.close()
 
     def test_vendor_http_500_is_failure_without_success_readback(self):
         updates = [{
@@ -294,7 +364,11 @@ class ReadOnlySyncTests(unittest.TestCase):
         caught.exception.close()
         self.assertEqual(
             [call[1] for call in FakeVendorHandler.calls],
-            ["/esls_new/login/userLogin", "/esls_new/associate/updateScreen"],
+            ["/esls_new/login/userLogin",
+             "/esls_new/mms/queryRouters?currentPage=0&routerId=0",
+             "/esls_new/mms/queryTags?currentPage=1&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+             "/esls_new/mms/queryTags?currentPage=2&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+             "/esls_new/associate/updateScreen"],
         )
 
 

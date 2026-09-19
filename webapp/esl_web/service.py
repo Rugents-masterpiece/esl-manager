@@ -470,16 +470,27 @@ class Service:
     @staticmethod
     def _vendor_integer(item: dict[str, Any], field: str, *, minimum: int | None = None,
                         maximum: int | None = None) -> int:
-        value = item.get(field)
+        return Service._vendor_integer_value(
+            item.get(field), field, minimum=minimum, maximum=maximum
+        )
+
+    @staticmethod
+    def _vendor_integer_value(value: Any, field: str, *, minimum: int | None = None,
+                              maximum: int | None = None) -> int:
         if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise IntegrationError(f"Invalid vendor field: {field}")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise IntegrationError(f"Invalid vendor field: {field}")
+        if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()) is None:
             raise IntegrationError(f"Invalid vendor field: {field}")
         try:
             number = int(value)
-        except (TypeError, ValueError) as error:
+        except (TypeError, ValueError, OverflowError) as error:
             raise IntegrationError(f"Invalid vendor field: {field}") from error
         if isinstance(value, float) and not value.is_integer():
             raise IntegrationError(f"Invalid vendor field: {field}")
-        if ((minimum is not None and number < minimum)
+        if (number < -(2**63) or number > 2**63 - 1
+                or (minimum is not None and number < minimum)
                 or (maximum is not None and number > maximum)):
             raise IntegrationError(f"Invalid vendor field: {field}")
         return number
@@ -494,8 +505,11 @@ class Service:
             raise IntegrationError(f"Invalid vendor field: {field}") from error
 
     def upsert_vendor_router(self, connection: sqlite3.Connection, item: dict[str, Any]) -> None:
-        router_id = self._vendor_id(item.get("routerID"), "routerID")
-        address = _text(item.get("routerIP"), "routerIP")
+        router_value = item.get("routerID")
+        if router_value is None:
+            router_value = item.get("mac") or item.get("id")
+        router_id = self._vendor_id(router_value, "routerID")
+        address = _text(item.get("routerIP") or item.get("ip"), "routerIP")
         heartbeat = item.get("lastHeartbeatTime")
         last_seen = None
         if heartbeat is not None:
@@ -506,52 +520,91 @@ class Service:
                 ).replace("+00:00", "Z")
             except (OverflowError, OSError, ValueError) as error:
                 raise IntegrationError("Invalid vendor field: lastHeartbeatTime") from error
-        state = self._vendor_integer(item, "state")
+        state = item.get("state")
+        online = state is True or str(state).lower() in {"1", "true", "online"}
+        description = item.get("description")
+        if description in (None, "", "null"):
+            description = item.get("shopName")
         self.storage.upsert_router(connection, {
             "id": router_id,
-            "name": f"Router {router_id}",
+            "name": _text(description, "description", required=False) or f"Router {router_id}",
             "address": address,
-            "status": "online" if state == 1 else "offline",
+            "status": "online" if online else "offline",
             "last_seen_at": last_seen,
         })
 
     def upsert_vendor_template(self, connection: sqlite3.Connection, item: dict[str, Any]) -> None:
         template_id = self._vendor_id(item.get("id"), "id")
+        name = _text(item.get("name") or item.get("descriptor"), "name")
+        occupied_names = {
+            row["name"] for row in connection.execute(
+                "SELECT name FROM templates WHERE id <> ?", (template_id,)
+            ).fetchall()
+        }
+        if name in occupied_names:
+            candidate = f"{name} ({template_id})"
+            suffix = 2
+            while candidate in occupied_names:
+                candidate = f"{name} ({template_id}-{suffix})"
+                suffix += 1
+            name = candidate
+        width = item.get("width")
+        height = item.get("height")
+        if width is None or height is None:
+            dimensions = re.fullmatch(r"\s*(\d+)\s*[xX×]\s*(\d+)\s*", str(item.get("styleLen") or ""))
+            if dimensions is None:
+                raise IntegrationError("Invalid vendor field: styleLen")
+            width, height = dimensions.groups()
         self.storage.upsert_template(connection, {
             "id": template_id,
-            "name": _text(item.get("name") or item.get("descriptor"), "name"),
-            "width": self._vendor_integer(item, "width", minimum=1),
-            "height": self._vendor_integer(item, "height", minimum=1),
-            "mapping_type": self._vendor_integer(item, "mappingtype"),
+            "name": name,
+            "width": self._vendor_integer_value(width, "width", minimum=1),
+            "height": self._vendor_integer_value(height, "height", minimum=1),
+            "mapping_type": self._vendor_integer_value(
+                item.get("mappingtype", 0), "mappingtype", minimum=0
+            ),
         })
 
     def upsert_vendor_tag(self, connection: sqlite3.Connection, item: dict[str, Any],
-                          router_ids: set[str], template_ids: set[str]) -> None:
+                          router_ids: set[str], template_ids: set[str],
+                          template_names: dict[str, str]) -> None:
         mac = _text(item.get("mac"), "mac")
         tag_id = self._vendor_id(mac, "mac")
         router_value = item.get("routerid")
+        if router_value is None:
+            router_value = item.get("routerMac")
         router_id = None if router_value in (None, "", 0, "0") else self._vendor_id(router_value, "routerid")
         if router_id not in router_ids:
             router_id = None
         template_value = item.get("styleId")
+        if template_value in (None, "", 0, "0"):
+            template_value = template_names.get(str(item.get("styleName") or ""))
         template_id = None if template_value in (None, "", 0, "0") else self._vendor_id(template_value, "styleId")
         if template_id not in template_ids:
             template_id = None
-        status_number = self._vendor_integer(item, "status")
-        statuses = {1: "ready", 2: "updating", 3: "failed", 4: "success"}
+        if "updateProgress" in item:
+            status_field = "updateProgress"
+        elif "status" in item:
+            status_field = "status"
+        else:
+            status_field = "updateProgress"
+            item = {**item, "updateProgress": 1}
+        status_number = self._vendor_integer(item, status_field)
+        statuses = {0: "ready", 1: "ready", 2: "updating", 3: "failed", 4: "success", 5: "ready"}
         if status_number not in statuses:
-            raise IntegrationError("Invalid vendor field: status")
-        label_value = item.get("showStyle")
+            raise IntegrationError(f"Invalid vendor field: {status_field}")
+        status_value = statuses[status_number]
+        label_value = item.get("showStyle") or item.get("name") or item.get("styleName")
         label = _text(label_value, "showStyle", required=False) if label_value else None
         self.storage.upsert_tag(connection, {
             "id": tag_id,
             "mac": mac,
             "label": label,
-            "width": self._vendor_integer(item, "width", minimum=1),
-            "height": self._vendor_integer(item, "height", minimum=1),
+            "width": self._vendor_integer_value(item.get("width", 1), "width", minimum=1),
+            "height": self._vendor_integer_value(item.get("height", 1), "height", minimum=1),
             "battery": self._vendor_integer(item, "power", minimum=0, maximum=100),
-            "rssi": self._vendor_integer(item, "rssi"),
-            "status": statuses[status_number],
+            "rssi": self._vendor_integer_value(item.get("rssi", -100), "rssi"),
+            "status": status_value,
             "router_id": router_id,
             "template_id": template_id,
             "last_seen_at": _now(),
@@ -572,10 +625,18 @@ class Service:
                 self.upsert_vendor_router(connection, item)
             for item in templates:
                 self.upsert_vendor_template(connection, item)
-            router_ids = {str(item.get("routerID")) for item in routers}
+            router_ids = {
+                str(item.get("routerID") if item.get("routerID") is not None else item.get("mac") or item.get("id"))
+                for item in routers
+            }
             template_ids = {str(item.get("id")) for item in templates}
+            template_names: dict[str, str] = {}
+            for item in templates:
+                template_names.setdefault(
+                    str(item.get("name") or item.get("descriptor")), str(item.get("id"))
+                )
             for item in tags:
-                self.upsert_vendor_tag(connection, item, router_ids, template_ids)
+                self.upsert_vendor_tag(connection, item, router_ids, template_ids, template_names)
             counts = {"routers": len(routers), "templates": len(templates), "tags": len(tags)}
             self._audit(connection, "vendor.sync.read_only", "system", "vendor", counts)
         return {"synced": counts}
@@ -616,9 +677,8 @@ class Service:
             verified = client.update_screen(updates, confirmation)
         except Exception as error:
             raise IntegrationError("Vendor display update failed or could not be verified") from error
-        statuses = {2: "updating", 4: "success", "2": "updating", "4": "success"}
         verified_tags = [
-            {"mac": item["mac"], "status": statuses[item["status"]]}
+            {"mac": item["mac"], "status": item["_verified_status"]}
             for item in verified
         ]
         with self.storage.connection() as connection:

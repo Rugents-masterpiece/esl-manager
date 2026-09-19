@@ -3,13 +3,20 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from esl_web.server import create_server
+from esl_web.server import _is_loopback_address, create_server
 
 
 class ApiTests(unittest.TestCase):
+    def test_live_dispatch_client_scope_accepts_only_loopback(self):
+        self.assertTrue(_is_loopback_address("127.0.0.1"))
+        self.assertTrue(_is_loopback_address("::1"))
+        self.assertFalse(_is_loopback_address("192.168.16.42"))
+        self.assertFalse(_is_loopback_address("not-an-address"))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.server = create_server(
@@ -48,6 +55,12 @@ class ApiTests(unittest.TestCase):
         for path in ("/api/routers", "/api/templates", "/api/jobs", "/api/alerts", "/api/audit"):
             _, _, result = self.request("GET", path)
             self.assertIsInstance(result["items"], list)
+
+    def test_health_reports_live_mode_only_when_writes_are_enabled(self):
+        with patch.dict("os.environ", {"ESL_LIVE_WRITES": "1"}):
+            status, _, health = self.request("GET", "/api/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(health, {"mode": "live", "status": "ok"})
 
     def test_product_binding_and_job_mutations_are_exposed(self):
         status, _, product = self.request("POST", "/api/products", {

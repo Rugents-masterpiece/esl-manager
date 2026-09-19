@@ -88,6 +88,8 @@ class FrontendSourceTests(unittest.TestCase):
         self.assertIn('byId("tag-signal").value', script)
         self.assertIn('progressFill.style.width = `${successRate}%`', script)
         self.assertIn('router.version || router.firmware_version', script)
+        self.assertIn('health.mode === "live"', script)
+        self.assertIn('health.mode === "read_only"', script)
 
 
 class StaticServerTests(unittest.TestCase):

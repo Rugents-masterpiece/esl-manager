@@ -7,6 +7,8 @@ import http.cookiejar
 import json
 import math
 import os
+import re
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -94,12 +96,13 @@ class VendorConfig:
         ))
         if (self.username is None) != (self.password is None):
             raise VendorConfigurationError("ESL_USERNAME and ESL_PASSWORD must be configured together")
-        if self.username is not None and not self.username:
+        if self.username is not None and (not isinstance(self.username, str) or not self.username):
             raise VendorConfigurationError("ESL_USERNAME must not be empty")
-        if self.password is not None and not self.password:
+        if self.password is not None and (not isinstance(self.password, str) or not self.password):
             raise VendorConfigurationError("ESL_PASSWORD must not be empty")
         if self.session is not None and (
-            not self.session or any(not 33 <= ord(character) <= 126 for character in self.session)
+            not isinstance(self.session, str) or not self.session
+            or any(not 33 <= ord(character) <= 126 for character in self.session)
         ):
             raise VendorConfigurationError("ESL_SESSION contains invalid characters")
 
@@ -202,17 +205,25 @@ class VendorClient:
             return
         assert self.config.password is not None
         body = urlencode({
-            "username": self.config.username,
+            "name": self.config.username,
             "passwd": hashlib.md5(self.config.password.encode()).hexdigest(),
         }).encode("ascii")
         result = self._request(
             "POST", "/login/userLogin", body,
             "application/x-www-form-urlencoded; charset=UTF-8", authenticate=False,
         )
-        if result is not True:
+        login_succeeded = result is True or (
+            isinstance(result, str)
+            and re.search(r"href=[\"'][^\"']*login/logout(?:[?\"'])", result) is not None
+        )
+        if not login_succeeded:
             raise VendorError("Vendor login failed")
         if not any(cookie.name == "JSESSIONID" for cookie in self._cookies):
             raise VendorError("Vendor login did not provide a session cookie")
+        probe = self._request(
+            "GET", "/mms/queryRouters?currentPage=0&routerId=0", authenticate=False
+        )
+        self._collection(probe, "authentication probe")
         self._logged_in = True
 
     @staticmethod
@@ -222,28 +233,91 @@ class VendorClient:
         return value
 
     def get_routers(self) -> list[dict[str, Any]]:
-        return self._collection(self._request("GET", "/associate/getRoutersMsg"), "routers")
+        return self._collection(
+            self._request("GET", "/mms/queryRouters?currentPage=0&routerId=0"),
+            "routers",
+        )
 
     def get_templates(self) -> list[dict[str, Any]]:
-        return self._collection(self._request("GET", "/associate/getStyleMsgs"), "templates")
+        return self._collection(
+            self._request("GET", "/mms/queryStyles?currentPage=0&templateType=0"),
+            "templates",
+        )
 
     def get_tags(self) -> list[dict[str, Any]]:
-        return self._collection(self._request("GET", "/associate/getTagsMsg"), "tags")
+        tags: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        page_fingerprints: set[tuple[str, ...]] = set()
+        hostname = urlsplit(self.config.base_url).hostname
+        delay = 0 if hostname in {"127.0.0.1", "localhost", "::1"} else 5
+        for page in range(1, 101):
+            collection = self._collection(
+                self._request(
+                    "GET",
+                    f"/mms/queryTags?currentPage={page}&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+                ),
+                "tags",
+            )
+            fingerprint = tuple(str(item.get("mac") or item.get("id")) for item in collection)
+            if not collection or fingerprint in page_fingerprints:
+                return tags
+            page_fingerprints.add(fingerprint)
+            for item in collection:
+                identity = str(item.get("mac") or item.get("id"))
+                if identity not in seen:
+                    seen.add(identity)
+                    tags.append(item)
+            if delay:
+                time.sleep(delay)
+        raise VendorError("Vendor tag pagination exceeded 100 pages")
 
     def update_screen(self, updates: list[dict[str, Any]], confirmation: str) -> list[dict[str, Any]]:
         """Dispatch updates only when double-gated, then confirm status by read-back."""
         if not live_writes_authorized(confirmation):
             raise LiveWritesDisabled("Live ESL writes are disabled or not explicitly confirmed")
+        requested_macs = {item.get("mac") for item in updates}
+        before_by_mac = {item.get("mac"): item for item in self.get_tags()}
+        if any(mac not in before_by_mac for mac in requested_macs):
+            raise VendorError("Vendor preflight could not find every requested tag")
+        before_status = {
+            mac: self._update_status(before_by_mac[mac]) for mac in requested_macs
+        }
+        if any(status is None for status in before_status.values()):
+            raise VendorError("Vendor preflight returned an invalid tag status")
         body = json.dumps(updates, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         accepted = self._request("POST", "/associate/updateScreen", body, "application/json")
         if accepted is not True:
             raise VendorError("Vendor did not accept the display update")
-        requested_macs = {item.get("mac") for item in updates}
         tags_by_mac = {item.get("mac"): item for item in self.get_tags()}
         verified = []
         for mac in requested_macs:
             tag = tags_by_mac.get(mac)
-            if tag is None or tag.get("status") not in {2, 4, "2", "4"}:
+            if tag is None:
                 raise VendorError(f"Vendor read-back did not confirm tag {mac}")
-            verified.append(tag)
+            current_status = self._update_status(tag)
+            if current_status not in {2, 4} or current_status == before_status[mac]:
+                raise VendorError(f"Vendor read-back did not confirm tag {mac}")
+            verified.append({
+                **tag,
+                "_verified_status": "updating" if current_status == 2 else "success",
+            })
         return sorted(verified, key=lambda item: str(item.get("mac")))
+
+    @staticmethod
+    def _update_status(item: dict[str, Any] | None) -> int | None:
+        if item is None:
+            return None
+        value = item.get("updateProgress")
+        if value is None:
+            value = item.get("status")
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+            return None
+        if isinstance(value, str) and re.fullmatch(r"[+-]?\d+", value.strip()) is None:
+            return None
+        try:
+            result = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return result if result in {0, 1, 2, 3, 4, 5} else None

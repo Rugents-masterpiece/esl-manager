@@ -28,12 +28,12 @@
         <a href="#jobs" data-view="jobs"><span aria-hidden="true">↻</span>Úlohy</a>
         <a href="#audit" data-view="audit"><span aria-hidden="true">≡</span>Audit</a>
       </nav>
-      <div class="nav-footer"><span>Režim</span><strong>Simulácia</strong></div>
+      <div class="nav-footer"><span>Režim</span><strong id="mode-label">Simulácia</strong></div>
     </aside>
 
     <main id="main-content" tabindex="-1">
       <div id="safety-banner" class="safety-banner" role="status">
-        <div><strong>Simulačný režim</strong><span> Zmeny sú lokálne. Žiadny zápis sa neposiela na fyzické ESL zariadenia.</span></div>
+        <div><strong id="mode-title">Simulačný režim</strong><span id="mode-description"> Zmeny sú lokálne. Žiadny zápis sa neposiela na fyzické ESL zariadenia.</span></div>
         <button id="sync-button" class="button button-tertiary" type="button">Synchronizovať iba na čítanie</button>
       </div>
       <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
