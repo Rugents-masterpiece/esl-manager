@@ -162,7 +162,9 @@ class ApiTests(unittest.TestCase):
             with urlopen(clone, timeout=2) as response:
                 self.assertEqual(response.status, 201)
                 self.assertEqual(json.loads(response.read())["id"], "200")
-            service.clone_vendor_template.assert_called_once_with(vendor, body)
+            service.clone_vendor_template.assert_called_once_with(
+                vendor, body, controller_id="legacy"
+            )
 
             cross_origin = Request(
                 base + "/api/vendor/templates/clone", data=json.dumps(body).encode(), method="POST",

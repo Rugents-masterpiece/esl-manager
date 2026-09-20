@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from .storage import Storage
+from .storage import LEGACY_CONTROLLER_ID, Storage
 from .vendor import live_writes_authorized
 
 
@@ -538,7 +538,8 @@ class Service:
             return None
         return Service._vendor_integer_value(value, field, minimum=minimum, maximum=maximum)
 
-    def _normalize_vendor_style(self, item: Any, *, detail: bool = False) -> dict[str, Any]:
+    def _normalize_vendor_style(self, item: Any, *, detail: bool = False,
+                                controller_id: str = LEGACY_CONTROLLER_ID) -> dict[str, Any]:
         if not isinstance(item, dict):
             raise IntegrationError("Invalid vendor style response")
         style_id = self._vendor_id(item.get("id"), "id")
@@ -567,14 +568,19 @@ class Service:
             "style_fields": [field.strip() for field in fields_value],
             "rotate": self._optional_vendor_integer(item.get("rotate"), "rotate"),
             "user_id": self._optional_vendor_integer(item.get("userid"), "userid", minimum=0),
-            "preview_url": f"/api/vendor/templates/{style_id}/preview",
+            "preview_url": (
+                f"/api/vendor/templates/{style_id}/preview"
+                + ("" if controller_id == LEGACY_CONTROLLER_ID
+                   else f"?controller_id={quote(controller_id, safe='')}")
+            ),
         }
         if not detail:
             result.pop("rotate")
             result.pop("user_id")
         return result
 
-    def _normalize_vendor_photo(self, item: Any) -> dict[str, Any]:
+    def _normalize_vendor_photo(self, item: Any,
+                                controller_id: str = LEGACY_CONTROLLER_ID) -> dict[str, Any]:
         if not isinstance(item, dict):
             raise IntegrationError("Invalid vendor photo response")
         photo_id = self._vendor_id(item.get("id"), "id")
@@ -587,10 +593,15 @@ class Service:
             "name": name,
             "width": self._vendor_integer(item, "width", minimum=1),
             "height": self._vendor_integer(item, "height", minimum=1),
-            "data_url": f"/api/vendor/photos/{quote(name, safe='')}/data",
+            "data_url": (
+                f"/api/vendor/photos/{quote(name, safe='')}/data"
+                + ("" if controller_id == LEGACY_CONTROLLER_ID
+                   else f"?controller_id={quote(controller_id, safe='')}")
+            ),
         }
 
-    def upsert_vendor_router(self, connection: sqlite3.Connection, item: dict[str, Any]) -> None:
+    def upsert_vendor_router(self, connection: sqlite3.Connection, item: dict[str, Any],
+                             controller_id: str = LEGACY_CONTROLLER_ID) -> None:
         router_value = item.get("routerID")
         if router_value is None:
             router_value = item.get("mac") or item.get("id")
@@ -617,14 +628,19 @@ class Service:
             "address": address,
             "status": "online" if online else "offline",
             "last_seen_at": last_seen,
-        })
+        }, controller_id=controller_id)
 
-    def upsert_vendor_template(self, connection: sqlite3.Connection, item: dict[str, Any]) -> None:
+    def upsert_vendor_template(self, connection: sqlite3.Connection, item: dict[str, Any],
+                               controller_id: str = LEGACY_CONTROLLER_ID) -> None:
         template_id = self._vendor_id(item.get("id"), "id")
         name = self._vendor_text(item.get("name") or item.get("descriptor"), "name")
+        local_id = self.storage.local_id(
+            connection, "template", controller_id, template_id
+        )
         occupied_names = {
             row["name"] for row in connection.execute(
-                "SELECT name FROM templates WHERE id <> ?", (template_id,)
+                "SELECT name FROM templates WHERE controller_id = ? AND id <> ?",
+                (controller_id, local_id),
             ).fetchall()
         }
         if name in occupied_names:
@@ -666,11 +682,12 @@ class Service:
             "style_fields": [field.strip() for field in style_fields],
             "rotate": self._optional_vendor_integer(item.get("rotate"), "rotate"),
             "user_id": self._optional_vendor_integer(item.get("userid"), "userid", minimum=0),
-        })
+        }, controller_id=controller_id)
 
     def upsert_vendor_tag(self, connection: sqlite3.Connection, item: dict[str, Any],
                           router_ids: set[str], template_ids: set[str],
-                          template_names: dict[str, str]) -> None:
+                          template_names: dict[str, str],
+                          controller_id: str = LEGACY_CONTROLLER_ID) -> None:
         mac = self._vendor_text(item.get("mac"), "mac")
         tag_id = self._vendor_id(mac, "mac")
         router_value = item.get("routerid")
@@ -719,7 +736,7 @@ class Service:
                 item.get("routerStatus"), "routerStatus"
             ),
             "sub": self._optional_vendor_integer(item.get("sub"), "sub"),
-        })
+        }, controller_id=controller_id)
 
     @staticmethod
     def _index_vendor_items(items: list[dict[str, Any]], field: str,
@@ -734,14 +751,15 @@ class Service:
             result[key] = item
         return result
 
-    def vendor_style_catalog(self, client: Any) -> list[dict[str, Any]]:
+    def vendor_style_catalog(self, client: Any,
+                             controller_id: str = LEGACY_CONTROLLER_ID) -> list[dict[str, Any]]:
         try:
             items = client.get_style_catalog()
         except Exception as error:
             raise IntegrationError("Vendor style catalog failed") from error
         if not isinstance(items, list):
             raise IntegrationError("Vendor style catalog returned invalid data")
-        return [self._normalize_vendor_style(item) for item in items]
+        return [self._normalize_vendor_style(item, controller_id=controller_id) for item in items]
 
     @staticmethod
     def _clone_catalog(client: Any) -> list[dict[str, Any]]:
@@ -1088,7 +1106,8 @@ class Service:
                 or len(target_names) != len(target_layout) or target_names != source_names):
             raise IntegrationError("Vendor template component identities changed during clone")
 
-    def clone_vendor_template(self, client: Any, data: Any) -> dict[str, Any]:
+    def clone_vendor_template(self, client: Any, data: Any, *,
+                              controller_id: str = LEGACY_CONTROLLER_ID) -> dict[str, Any]:
         """Clone one allow-listed template with reconciled, read-back-verified mutations."""
         if not isinstance(data, dict) or set(data) != {"source_id", "target_name"}:
             raise ValidationError("JSON body must contain only source_id and target_name")
@@ -1208,7 +1227,11 @@ class Service:
                 "source_sha256": self._source_snapshot_hash(final_source),
             }
             with self.storage.connection() as connection:
-                self._audit(connection, "vendor.template.cloned", "template", str(created_id), {
+                audit_id = (str(created_id) if controller_id == LEGACY_CONTROLLER_ID
+                            else f"{controller_id}:{created_id}")
+                self._audit(connection, "vendor.template.cloned", "template", audit_id, {
+                    "controller_id": controller_id,
+                    "vendor_template_id": str(created_id),
                     "source_id": source_id, "target_name": target_name,
                     "layout_sha256": result["layout_sha256"],
                     "preview_sha256": result["preview_sha256"],
@@ -1230,35 +1253,42 @@ class Service:
                 raise
             raise IntegrationError("Vendor template clone failed") from error
 
-    def vendor_style_detail(self, client: Any, style_id: int) -> dict[str, Any]:
+    def vendor_style_detail(self, client: Any, style_id: int,
+                            controller_id: str = LEGACY_CONTROLLER_ID) -> dict[str, Any]:
         try:
             item = client.get_style_detail(style_id)
         except Exception as error:
             raise IntegrationError("Vendor style detail failed") from error
-        normalized = self._normalize_vendor_style(item, detail=True)
+        normalized = self._normalize_vendor_style(
+            item, detail=True, controller_id=controller_id
+        )
         if normalized["id"] != str(style_id):
             raise IntegrationError("Vendor style detail returned a mismatched id")
         with self.storage.connection() as connection:
             exists = connection.execute(
-                "SELECT 1 FROM templates WHERE id = ?", (str(style_id),)
+                "SELECT 1 FROM templates WHERE controller_id = ? AND vendor_id = ?",
+                (controller_id, str(style_id)),
             ).fetchone()
             if exists is not None:
-                self.upsert_vendor_template(connection, item)
+                self.upsert_vendor_template(connection, item, controller_id=controller_id)
         return normalized
 
-    def vendor_photos(self, client: Any) -> list[dict[str, Any]]:
+    def vendor_photos(self, client: Any,
+                      controller_id: str = LEGACY_CONTROLLER_ID) -> list[dict[str, Any]]:
         try:
             items = client.get_photos()
         except Exception as error:
             raise IntegrationError("Vendor photo catalog failed") from error
         if not isinstance(items, list):
             raise IntegrationError("Vendor photo catalog returned invalid data")
-        photos = [self._normalize_vendor_photo(item) for item in items]
+        photos = [self._normalize_vendor_photo(item, controller_id) for item in items]
         self._index_vendor_items(photos, "id", "photo catalog")
         if len({photo["name"] for photo in photos}) != len(photos):
             raise IntegrationError("Invalid vendor photo catalog response")
         with self.storage.connection() as connection:
-            self.storage.replace_vendor_photos(connection, photos, _now())
+            self.storage.replace_vendor_photos(
+                connection, photos, _now(), controller_id=controller_id
+            )
         return photos
 
     @staticmethod
@@ -1285,7 +1315,8 @@ class Service:
             raise IntegrationError("Vendor template preview returned invalid data")
         return result
 
-    def sync_read_only(self, client: Any) -> dict[str, dict[str, int]]:
+    def sync_read_only(self, client: Any,
+                       controller_id: str = LEGACY_CONTROLLER_ID) -> dict[str, dict[str, int]]:
         """Fetch approved read-only collections and atomically upsert local inventory."""
         try:
             routers = client.get_routers()
@@ -1365,9 +1396,9 @@ class Service:
         tags = merged_tags
         with self.storage.connection() as connection:
             for item in routers:
-                self.upsert_vendor_router(connection, item)
+                self.upsert_vendor_router(connection, item, controller_id=controller_id)
             for item in templates:
-                self.upsert_vendor_template(connection, item)
+                self.upsert_vendor_template(connection, item, controller_id=controller_id)
             router_ids = {
                 str(item.get("routerID") if item.get("routerID") is not None else item.get("mac") or item.get("id"))
                 for item in routers
@@ -1379,12 +1410,21 @@ class Service:
                     str(item.get("name") or item.get("descriptor")), str(item.get("id"))
                 )
             for item in tags:
-                self.upsert_vendor_tag(connection, item, router_ids, template_ids, template_names)
+                self.upsert_vendor_tag(
+                    connection, item, router_ids, template_ids, template_names,
+                    controller_id=controller_id,
+                )
             counts = {"routers": len(routers), "templates": len(templates), "tags": len(tags)}
-            self._audit(connection, "vendor.sync.read_only", "system", "vendor", counts)
+            audit_id = ("vendor" if controller_id == LEGACY_CONTROLLER_ID
+                        else f"{controller_id}:vendor")
+            self._audit(
+                connection, "vendor.sync.read_only", "system", audit_id,
+                {**counts, "controller_id": controller_id},
+            )
         return {"synced": counts}
 
-    def dispatch_live(self, client: Any, data: Any) -> dict[str, Any]:
+    def dispatch_live(self, client: Any, data: Any,
+                      controller_id: str = LEGACY_CONTROLLER_ID) -> dict[str, Any]:
         """Validate, double-gate and read-back a physical updateScreen dispatch."""
         confirmation = data.get("confirmation") if isinstance(data, dict) else None
         if not live_writes_authorized(confirmation):
@@ -1426,8 +1466,12 @@ class Service:
         ]
         with self.storage.connection() as connection:
             for item in verified_tags:
-                connection.execute("UPDATE tags SET status = ? WHERE mac = ?", (item["status"], item["mac"]))
+                connection.execute(
+                    "UPDATE tags SET status = ? WHERE controller_id = ? AND mac = ?",
+                    (item["status"], controller_id, item["mac"]),
+                )
             self._audit(connection, "vendor.update_screen", "tag", ",".join(sorted(macs)), {
-                "count": len(updates), "verified_tags": verified_tags,
+                "controller_id": controller_id, "count": len(updates),
+                "verified_tags": verified_tags,
             })
         return {"dispatched": len(updates), "verified_tags": verified_tags}

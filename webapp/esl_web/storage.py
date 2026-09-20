@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Iterator
 
 
+SCHEMA_VERSION = 2
+LEGACY_CONTROLLER_ID = "legacy"
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS products (
@@ -123,6 +126,8 @@ class Storage:
     """Own the database schema and short-lived SQLite connections."""
 
     TABLES = (
+        "controllers",
+        "device_models",
         "products",
         "tags",
         "routers",
@@ -154,7 +159,7 @@ class Storage:
     def initialize(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as connection:
-            connection.executescript(SCHEMA)
+            self._execute_statements(connection, SCHEMA)
             self._ensure_columns(connection, "templates", {
                 "descriptor": "TEXT",
                 "screen_type": "INTEGER",
@@ -170,6 +175,175 @@ class Storage:
                 "router_status": "INTEGER",
                 "sub": "INTEGER",
             })
+            connection.commit()
+            connection.execute("PRAGMA foreign_keys = OFF")
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                version = connection.execute("PRAGMA user_version").fetchone()[0]
+                if version < SCHEMA_VERSION:
+                    self._migrate_controller_scope(connection)
+                    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.execute("PRAGMA foreign_keys = ON")
+            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise sqlite3.IntegrityError(f"Foreign key check failed: {violations!r}")
+
+    @staticmethod
+    def _migrate_controller_scope(connection: sqlite3.Connection) -> None:
+        """Rebuild vendor-owned tables with stable local and scoped vendor identities."""
+        statements = """
+            PRAGMA legacy_alter_table = ON;
+            CREATE TABLE controllers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0, 1))
+            );
+            CREATE UNIQUE INDEX idx_controllers_one_default
+                ON controllers(is_default) WHERE is_default = 1;
+            INSERT INTO controllers(id, name, is_default) VALUES ('legacy', 'Legacy controller', 1);
+
+            CREATE TABLE device_models (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                width INTEGER NOT NULL CHECK(width > 0),
+                height INTEGER NOT NULL CHECK(height > 0),
+                alignment_id INTEGER NOT NULL CHECK(alignment_id > 0),
+                screen_type INTEGER NOT NULL CHECK(screen_type > 0)
+            );
+            INSERT INTO device_models VALUES ('2.13TFT-BW', '2.13TFT-BW', 250, 132, 8, 1);
+            INSERT INTO device_models VALUES ('2.13EPD-BWR', '2.13EPD-BWR', 250, 122, 9, 2);
+            INSERT INTO device_models VALUES ('2.9EPD-BWR', '2.9EPD-BWR', 296, 128, 2, 2);
+
+            CREATE TABLE local_id_sequences (
+                entity TEXT PRIMARY KEY,
+                next_value INTEGER NOT NULL CHECK(next_value > 0)
+            );
+            CREATE TABLE local_ids (
+                entity TEXT NOT NULL,
+                controller_id TEXT NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+                vendor_id TEXT NOT NULL,
+                local_id TEXT NOT NULL,
+                PRIMARY KEY(entity, controller_id, vendor_id),
+                UNIQUE(entity, local_id)
+            );
+
+            ALTER TABLE routers RENAME TO routers_v1;
+            CREATE TABLE routers (
+                id TEXT PRIMARY KEY,
+                controller_id TEXT NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+                vendor_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                address TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('online', 'offline')),
+                last_seen_at TEXT,
+                UNIQUE(controller_id, vendor_id),
+                UNIQUE(controller_id, address)
+            );
+            INSERT INTO routers(id, controller_id, vendor_id, name, address, status, last_seen_at)
+                SELECT id, 'legacy', id, name, address, status, last_seen_at FROM routers_v1;
+
+            ALTER TABLE templates RENAME TO templates_v1;
+            CREATE TABLE templates (
+                id TEXT PRIMARY KEY,
+                controller_id TEXT NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+                vendor_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                width INTEGER NOT NULL CHECK(width > 0),
+                height INTEGER NOT NULL CHECK(height > 0),
+                mapping_type INTEGER NOT NULL DEFAULT 0,
+                descriptor TEXT,
+                screen_type INTEGER,
+                background_id INTEGER,
+                vendor_updated_at TEXT,
+                style_fields TEXT NOT NULL DEFAULT '[]',
+                rotate INTEGER,
+                user_id INTEGER,
+                UNIQUE(controller_id, vendor_id),
+                UNIQUE(controller_id, name)
+            );
+            INSERT INTO templates(
+                id, controller_id, vendor_id, name, width, height, mapping_type, descriptor,
+                screen_type, background_id, vendor_updated_at, style_fields, rotate, user_id
+            ) SELECT id, 'legacy', id, name, width, height, mapping_type, descriptor,
+                     screen_type, background_id, vendor_updated_at, style_fields, rotate, user_id
+                FROM templates_v1;
+
+            ALTER TABLE tags RENAME TO tags_v1;
+            CREATE TABLE tags (
+                id TEXT PRIMARY KEY,
+                controller_id TEXT NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+                vendor_id TEXT NOT NULL,
+                mac TEXT NOT NULL,
+                label TEXT,
+                width INTEGER NOT NULL CHECK(width > 0),
+                height INTEGER NOT NULL CHECK(height > 0),
+                battery INTEGER NOT NULL CHECK(battery BETWEEN 0 AND 100),
+                rssi INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('ready', 'updating', 'failed', 'success')),
+                router_id TEXT REFERENCES routers(id) ON DELETE SET NULL,
+                template_id TEXT REFERENCES templates(id) ON DELETE SET NULL,
+                device_model_id TEXT REFERENCES device_models(id) ON DELETE SET NULL,
+                last_seen_at TEXT,
+                show_style TEXT,
+                vendor_tag_id INTEGER,
+                router_status INTEGER,
+                sub INTEGER,
+                UNIQUE(controller_id, vendor_id),
+                UNIQUE(controller_id, mac)
+            );
+            INSERT INTO tags(
+                id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status,
+                router_id, template_id, last_seen_at, show_style, vendor_tag_id, router_status, sub
+            ) SELECT source.id, 'legacy',
+                     CASE
+                         WHEN source.vendor_tag_id IS NULL OR source.vendor_tag_id = 0
+                             THEN 'id:' || hex(CAST(source.id AS BLOB))
+                         WHEN (SELECT COUNT(*) FROM tags_v1 AS duplicate
+                               WHERE duplicate.vendor_tag_id = source.vendor_tag_id) > 1
+                             THEN CAST(source.vendor_tag_id AS TEXT) || ':id:'
+                                  || hex(CAST(source.id AS BLOB))
+                         ELSE CAST(source.vendor_tag_id AS TEXT)
+                     END,
+                     source.mac, source.label, source.width,
+                     source.height, source.battery, source.rssi, source.status,
+                     source.router_id, source.template_id, source.last_seen_at, source.show_style,
+                     source.vendor_tag_id, source.router_status, source.sub FROM tags_v1 AS source;
+
+            ALTER TABLE vendor_photos RENAME TO vendor_photos_v1;
+            CREATE TABLE vendor_photos (
+                id TEXT PRIMARY KEY,
+                controller_id TEXT NOT NULL REFERENCES controllers(id) ON DELETE CASCADE,
+                vendor_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                width INTEGER NOT NULL CHECK(width > 0),
+                height INTEGER NOT NULL CHECK(height > 0),
+                synced_at TEXT NOT NULL,
+                UNIQUE(controller_id, vendor_id),
+                UNIQUE(controller_id, name)
+            );
+            INSERT INTO vendor_photos(id, controller_id, vendor_id, name, width, height, synced_at)
+                SELECT id, 'legacy', id, name, width, height, synced_at FROM vendor_photos_v1;
+
+            DROP TABLE tags_v1;
+            DROP TABLE routers_v1;
+            DROP TABLE templates_v1;
+            DROP TABLE vendor_photos_v1;
+            CREATE INDEX IF NOT EXISTS idx_tags_status ON tags(status);
+            PRAGMA legacy_alter_table = OFF;
+        """
+        Storage._execute_statements(connection, statements)
+
+    @staticmethod
+    def _execute_statements(connection: sqlite3.Connection, statements: str) -> None:
+        """Execute simple schema statements without executescript's implicit commit."""
+        for statement in statements.split(";"):
+            if statement.strip():
+                connection.execute(statement)
 
     @staticmethod
     def _ensure_columns(connection: sqlite3.Connection, table: str,
@@ -182,18 +356,18 @@ class Storage:
     def seed_demo(self) -> None:
         """Insert deterministic sample data without duplicating rows."""
         statements = (
-            ("INSERT OR IGNORE INTO templates(id, name, width, height, mapping_type) VALUES (?, ?, ?, ?, ?)",
-             ("tpl-default", "Základná cenovka", 296, 128, 0)),
-            ("INSERT OR IGNORE INTO routers VALUES (?, ?, ?, ?, ?)",
-             ("router-main", "Predajňa", "192.0.2.10", "online", "2026-01-01T09:00:00Z")),
+            ("INSERT OR IGNORE INTO templates(id, controller_id, vendor_id, name, width, height, mapping_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+             ("tpl-default", LEGACY_CONTROLLER_ID, "tpl-default", "Základná cenovka", 296, 128, 0)),
+            ("INSERT OR IGNORE INTO routers(id, controller_id, vendor_id, name, address, status, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+             ("router-main", LEGACY_CONTROLLER_ID, "router-main", "Predajňa", "192.0.2.10", "online", "2026-01-01T09:00:00Z")),
             ("INSERT OR IGNORE INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
              ("prod-coffee", "SKU-COFFEE", "8580000000011", "Káva", 6.49, "EUR", "tpl-default", "2026-01-01T09:00:00Z", "2026-01-01T09:00:00Z")),
             ("INSERT OR IGNORE INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
              ("prod-tea", "SKU-TEA", "8580000000028", "Čaj", 3.29, "EUR", "tpl-default", "2026-01-01T09:00:00Z", "2026-01-01T09:00:00Z")),
-            ("INSERT OR IGNORE INTO tags(id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-             ("tag-001", "00:11:22:33:44:55", "Regál A", 296, 128, 88, -55, "ready", "router-main", "tpl-default", "2026-01-01T09:00:00Z")),
-            ("INSERT OR IGNORE INTO tags(id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-             ("tag-002", "00:11:22:33:44:66", "Regál B", 296, 128, 15, -82, "failed", "router-main", "tpl-default", "2026-01-01T08:55:00Z")),
+            ("INSERT OR IGNORE INTO tags(id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             ("tag-001", LEGACY_CONTROLLER_ID, "tag-001", "00:11:22:33:44:55", "Regál A", 296, 128, 88, -55, "ready", "router-main", "tpl-default", "2026-01-01T09:00:00Z")),
+            ("INSERT OR IGNORE INTO tags(id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             ("tag-002", LEGACY_CONTROLLER_ID, "tag-002", "00:11:22:33:44:66", "Regál B", 296, 128, 15, -82, "failed", "router-main", "tpl-default", "2026-01-01T08:55:00Z")),
             ("INSERT OR IGNORE INTO product_tags VALUES (?, ?, ?)",
              ("prod-coffee", "tag-001", "2026-01-01T09:00:00Z")),
             ("INSERT OR IGNORE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -220,54 +394,207 @@ class Storage:
                 for table in self.TABLES
             }
 
-    def upsert_router(self, connection: sqlite3.Connection, router: dict) -> None:
+    def configure_controllers(self, controllers: list[dict]) -> None:
+        """Persist public registry metadata without storing controller credentials."""
+        with self.connection() as connection:
+            connection.execute("UPDATE controllers SET is_default = 0 WHERE is_default = 1")
+            for controller in controllers:
+                connection.execute(
+                    "INSERT INTO controllers(id, name, is_default) VALUES (?, ?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, "
+                    "is_default=excluded.is_default",
+                    (controller["id"], controller["name"], int(controller["default"])),
+                )
+
+    @staticmethod
+    def local_id(connection: sqlite3.Connection, entity: str,
+                 controller_id: str, vendor_id: object) -> str:
+        """Return a stable transactionally allocated ID that cannot overlap an existing PK."""
+        tables = {"router": "routers", "template": "templates", "tag": "tags",
+                  "photo": "vendor_photos"}
+        if entity not in tables:
+            raise ValueError("Unknown local ID entity")
+        table = tables[entity]
+        value = str(vendor_id)
+        mapped = connection.execute(
+            "SELECT local_id FROM local_ids "
+            "WHERE entity = ? AND controller_id = ? AND vendor_id = ?",
+            (entity, controller_id, value),
+        ).fetchone()
+        if mapped is not None:
+            return mapped[0]
+        persisted = connection.execute(
+            f"SELECT id FROM {table} WHERE controller_id = ? AND vendor_id = ?",
+            (controller_id, value),
+        ).fetchone()
+        if persisted is not None:
+            try:
+                connection.execute(
+                    "INSERT INTO local_ids(entity, controller_id, vendor_id, local_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    (entity, controller_id, value, persisted[0]),
+                )
+            except sqlite3.IntegrityError:
+                owner = connection.execute(
+                    "SELECT controller_id, vendor_id FROM local_ids "
+                    "WHERE entity = ? AND local_id = ?",
+                    (entity, persisted[0]),
+                ).fetchone()
+                if owner is None or tuple(owner) != (controller_id, value):
+                    raise
+            return persisted[0]
+        raw_id_available = (
+            connection.execute(f"SELECT 1 FROM {table} WHERE id = ?", (value,)).fetchone()
+            is None
+            and connection.execute(
+                "SELECT 1 FROM local_ids WHERE entity = ? AND local_id = ?",
+                (entity, value),
+            ).fetchone() is None
+        )
+        if controller_id == LEGACY_CONTROLLER_ID and raw_id_available:
+            connection.execute(
+                "INSERT INTO local_ids(entity, controller_id, vendor_id, local_id) "
+                "VALUES (?, ?, ?, ?)",
+                (entity, controller_id, value, value),
+            )
+            return value
+        while True:
+            allocated = connection.execute(
+                "INSERT INTO local_id_sequences(entity, next_value) VALUES (?, 2) "
+                "ON CONFLICT(entity) DO UPDATE SET next_value = next_value + 1 "
+                "RETURNING next_value - 1",
+                (entity,),
+            ).fetchone()[0]
+            candidate = f"scoped-{entity}-{allocated}"
+            if (connection.execute(
+                    f"SELECT 1 FROM {table} WHERE id = ?", (candidate,)
+            ).fetchone() is not None or connection.execute(
+                    "SELECT 1 FROM local_ids WHERE entity = ? AND local_id = ?",
+                    (entity, candidate),
+            ).fetchone() is not None):
+                continue
+            connection.execute(
+                "INSERT INTO local_ids(entity, controller_id, vendor_id, local_id) "
+                "VALUES (?, ?, ?, ?)",
+                (entity, controller_id, value, candidate),
+            )
+            return candidate
+
+    def upsert_router(self, connection: sqlite3.Connection, router: dict,
+                      controller_id: str = LEGACY_CONTROLLER_ID) -> None:
         """Insert or update one normalized vendor router in an existing transaction."""
+        vendor_id = str(router["id"])
+        local_id = self.local_id(connection, "router", controller_id, vendor_id)
         connection.execute(
-            "INSERT INTO routers(id, name, address, status, last_seen_at) VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, address=excluded.address, "
-            "status=excluded.status, last_seen_at=excluded.last_seen_at",
-            (router["id"], router["name"], router["address"], router["status"], router["last_seen_at"]),
+            "INSERT INTO routers(id, controller_id, vendor_id, name, address, status, last_seen_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(controller_id, vendor_id) DO UPDATE SET name=excluded.name, "
+            "address=excluded.address, status=excluded.status, last_seen_at=excluded.last_seen_at",
+            (local_id, controller_id, vendor_id, router["name"], router["address"],
+             router["status"], router["last_seen_at"]),
         )
 
-    def upsert_template(self, connection: sqlite3.Connection, template: dict) -> None:
+    def upsert_template(self, connection: sqlite3.Connection, template: dict,
+                        controller_id: str = LEGACY_CONTROLLER_ID) -> None:
         """Insert or update one normalized vendor template in an existing transaction."""
+        vendor_id = str(template["id"])
+        local_id = self.local_id(connection, "template", controller_id, vendor_id)
         connection.execute(
-            "INSERT INTO templates(id, name, width, height, mapping_type, descriptor, screen_type, "
+            "INSERT INTO templates(id, controller_id, vendor_id, name, width, height, mapping_type, descriptor, screen_type, "
             "background_id, vendor_updated_at, style_fields, rotate, user_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, width=excluded.width, "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(controller_id, vendor_id) DO UPDATE SET name=excluded.name, width=excluded.width, "
             "height=excluded.height, mapping_type=excluded.mapping_type, descriptor=excluded.descriptor, "
             "screen_type=excluded.screen_type, background_id=excluded.background_id, "
             "vendor_updated_at=excluded.vendor_updated_at, style_fields=excluded.style_fields, "
             "rotate=excluded.rotate, user_id=excluded.user_id",
-            (template["id"], template["name"], template["width"], template["height"],
+            (local_id, controller_id, vendor_id, template["name"], template["width"], template["height"],
              template["mapping_type"], template.get("descriptor"), template.get("screen_type"),
              template.get("background_id"), template.get("vendor_updated_at"),
              json.dumps(template.get("style_fields", []), ensure_ascii=False),
              template.get("rotate"), template.get("user_id")),
         )
 
-    def upsert_tag(self, connection: sqlite3.Connection, tag: dict) -> None:
+    @staticmethod
+    def _disambiguated_tag_vendor_id(vendor_id: str, source_id: object) -> str:
+        encoded = str(source_id).encode("utf-8").hex().upper()
+        return f"{vendor_id}:id:{encoded}"
+
+    def upsert_tag(self, connection: sqlite3.Connection, tag: dict,
+                   controller_id: str = LEGACY_CONTROLLER_ID) -> None:
         """Insert or update one normalized vendor tag in an existing transaction."""
+        raw_vendor_id = tag.get("vendor_tag_id")
+        positive_vendor_id = raw_vendor_id not in (None, "", 0, "0")
+        base_vendor_id = str(raw_vendor_id) if positive_vendor_id else str(tag["id"])
+        existing = connection.execute(
+            "SELECT id, vendor_id FROM tags WHERE controller_id = ? AND mac = ?",
+            (controller_id, tag["mac"]),
+        ).fetchone()
+        if existing is not None:
+            local_id, vendor_id = existing
+        else:
+            vendor_id = base_vendor_id
+            disambiguated_identity = self._disambiguated_tag_vendor_id(
+                base_vendor_id, tag["id"]
+            )
+            local_identity = (
+                disambiguated_identity
+                if positive_vendor_id and controller_id != LEGACY_CONTROLLER_ID
+                else str(tag["id"])
+            )
+            if positive_vendor_id:
+                collision = connection.execute(
+                    "SELECT id FROM tags WHERE controller_id = ? AND vendor_id = ?",
+                    (controller_id, base_vendor_id),
+                ).fetchone()
+                if collision is not None:
+                    reserved = connection.execute(
+                        "SELECT vendor_id FROM local_ids "
+                        "WHERE entity = 'tag' AND controller_id = ? AND local_id = ?",
+                        (controller_id, collision["id"]),
+                    ).fetchone()
+                    existing_identity = (
+                        reserved[0]
+                        if (reserved is not None
+                            and reserved[0].startswith(f"{base_vendor_id}:id:"))
+                        else self._disambiguated_tag_vendor_id(
+                            base_vendor_id, collision["id"]
+                        )
+                    )
+                    connection.execute(
+                        "UPDATE tags SET vendor_id = ? WHERE id = ?",
+                        (existing_identity, collision["id"]),
+                    )
+                    vendor_id = disambiguated_identity
+            local_id = self.local_id(connection, "tag", controller_id, local_identity)
+        router_id = (self.local_id(connection, "router", controller_id, tag["router_id"])
+                     if tag.get("router_id") is not None else None)
+        template_id = (self.local_id(connection, "template", controller_id, tag["template_id"])
+                       if tag.get("template_id") is not None else None)
         connection.execute(
-            "INSERT INTO tags(id, mac, label, width, height, battery, rssi, status, router_id, template_id, "
+            "INSERT INTO tags(id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status, router_id, template_id, "
             "last_seen_at, show_style, vendor_tag_id, router_status, sub) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET mac=excluded.mac, label=excluded.label, width=excluded.width, "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(controller_id, vendor_id) DO UPDATE SET mac=excluded.mac, label=excluded.label, width=excluded.width, "
             "height=excluded.height, battery=excluded.battery, rssi=excluded.rssi, status=excluded.status, "
             "router_id=excluded.router_id, template_id=excluded.template_id, last_seen_at=excluded.last_seen_at, "
             "show_style=excluded.show_style, vendor_tag_id=excluded.vendor_tag_id, "
             "router_status=excluded.router_status, sub=excluded.sub",
-            (tag["id"], tag["mac"], tag["label"], tag["width"], tag["height"], tag["battery"],
-             tag["rssi"], tag["status"], tag["router_id"], tag["template_id"], tag["last_seen_at"],
-             tag.get("show_style"), tag.get("vendor_tag_id"), tag.get("router_status"), tag.get("sub")),
+            (local_id, controller_id, vendor_id, tag["mac"], tag["label"], tag["width"],
+             tag["height"], tag["battery"], tag["rssi"], tag["status"], router_id, template_id,
+             tag["last_seen_at"], tag.get("show_style"), tag.get("vendor_tag_id"),
+             tag.get("router_status"), tag.get("sub")),
         )
 
     def replace_vendor_photos(self, connection: sqlite3.Connection,
-                              photos: list[dict], synced_at: str) -> None:
-        connection.execute("DELETE FROM vendor_photos")
+                              photos: list[dict], synced_at: str,
+                              controller_id: str = LEGACY_CONTROLLER_ID) -> None:
+        connection.execute("DELETE FROM vendor_photos WHERE controller_id = ?", (controller_id,))
         connection.executemany(
-            "INSERT INTO vendor_photos(id, name, width, height, synced_at) VALUES (?, ?, ?, ?, ?)",
-            [(photo["id"], photo["name"], photo["width"], photo["height"], synced_at)
+            "INSERT INTO vendor_photos(id, controller_id, vendor_id, name, width, height, synced_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(self.local_id(connection, "photo", controller_id, photo["id"]),
+              controller_id, str(photo["id"]), photo["name"], photo["width"], photo["height"],
+              synced_at)
              for photo in photos],
         )

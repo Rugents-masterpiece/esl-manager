@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from .controllers import CONTROLLER_ID_PATTERN, ControllerRegistry
 from .service import (
     ForbiddenError,
     IntegrationError,
@@ -30,7 +31,7 @@ from .service import (
     UnauthorizedError,
     ValidationError,
 )
-from .storage import Storage
+from .storage import LEGACY_CONTROLLER_ID, Storage
 from .vendor import VendorClient, VendorConfig, VendorConfigurationError, live_writes_authorized
 
 
@@ -58,13 +59,23 @@ class EslHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], handler, service: Service,
                  vendor_client: VendorClient | None = None,
+                 controller_registry: ControllerRegistry | None = None,
                  static_root: Path | None = None,
                  api_token: str | None = None):
         if api_token is not None and not is_valid_api_token(api_token):
             raise ValueError("API token must be a 64-character URL-safe token")
+        if vendor_client is not None and controller_registry is not None:
+            raise ValueError("vendor_client and controller_registry are mutually exclusive")
         super().__init__(address, handler)
         self.service = service
-        self.vendor_client = vendor_client
+        self.controller_registry = controller_registry
+        self.controller_id = (
+            controller_registry.default_id
+            if controller_registry is not None else LEGACY_CONTROLLER_ID
+        )
+        self.vendor_client = (
+            controller_registry.get() if controller_registry is not None else vendor_client
+        )
         self.api_token_digest = (
             hashlib.sha256(api_token.encode("utf-8")).digest() if api_token is not None else None
         )
@@ -169,10 +180,32 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     @staticmethod
-    def _vendor_client(server: EslHTTPServer) -> VendorClient:
-        if server.vendor_client is None:
+    def _vendor_target(server: EslHTTPServer,
+                       query: dict[str, list[str]]) -> tuple[VendorClient | None, str]:
+        if set(query) - {"controller_id"}:
+            raise ValidationError("Vendor route accepts only controller_id query parameter")
+        values = query.get("controller_id")
+        if values is None:
+            return server.vendor_client, server.controller_id
+        if len(values) != 1 or CONTROLLER_ID_PATTERN.fullmatch(values[0]) is None:
+            raise ValidationError("Invalid controller_id", details={"field": "controller_id"})
+        if server.controller_registry is None:
+            raise ValidationError("Explicit controller selection is not configured",
+                                  details={"field": "controller_id"})
+        controller_id = values[0]
+        try:
+            return server.controller_registry.get(controller_id), controller_id
+        except KeyError as error:
+            raise ValidationError("Unknown controller_id",
+                                  details={"field": "controller_id"}) from error
+
+    @classmethod
+    def _required_vendor_target(cls, server: EslHTTPServer,
+                                query: dict[str, list[str]]) -> tuple[VendorClient, str]:
+        client, controller_id = cls._vendor_target(server, query)
+        if client is None:
             raise IntegrationError("Vendor integration is not configured")
-        return server.vendor_client
+        return client, controller_id
 
     def _session_id(self) -> str | None:
         raw_cookie = self.headers.get("Cookie")
@@ -254,6 +287,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             split = urlsplit(self.path)
             path = split.path.rstrip("/") or "/"
+            query = parse_qs(split.query, keep_blank_values=True)
             service = cast(EslHTTPServer, self.server).service
             server = cast(EslHTTPServer, self.server)
             if method == "POST" and path == "/api/session":
@@ -265,23 +299,24 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 raise ForbiddenError("API mutations are restricted to the local host")
             if method == "POST" and path == "/api/sync/read-only":
-                if split.query:
-                    raise ValidationError("Read-only sync does not accept query parameters")
                 if self._body() != {}:
                     raise ValidationError("Read-only sync body must be an empty object")
-                client = server.vendor_client
+                client, controller_id = self._vendor_target(server, query)
                 if client is None:
                     try:
                         client = VendorClient(VendorConfig.from_env())
                     except VendorConfigurationError as error:
                         raise IntegrationError("Vendor integration is not configured") from error
-                self._json(HTTPStatus.OK, service.sync_read_only(client))
+                self._json(HTTPStatus.OK, service.sync_read_only(
+                    client, controller_id=controller_id
+                ))
             elif method == "POST" and path == "/api/vendor/templates/clone":
-                if split.query:
-                    raise ValidationError("Template clone does not accept query parameters")
+                client, controller_id = self._required_vendor_target(server, query)
                 self._json(
                     HTTPStatus.CREATED,
-                    service.clone_vendor_template(self._vendor_client(server), self._body()),
+                    service.clone_vendor_template(
+                        client, self._body(), controller_id=controller_id
+                    ),
                 )
             elif method == "POST" and path == "/api/dispatch/live":
                 if os.environ.get("ESL_LIVE_WRITES") != "1":
@@ -294,14 +329,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise ForbiddenError(
                         "Live ESL writes are disabled or not explicitly confirmed"
                     ) from error
-                client = server.vendor_client
+                client, controller_id = self._vendor_target(server, query)
                 confirmation = data.get("confirmation") if isinstance(data, dict) else None
                 if client is None and live_writes_authorized(confirmation):
                     try:
                         client = VendorClient(VendorConfig.from_env())
                     except VendorConfigurationError as error:
                         raise IntegrationError("Vendor integration is not configured") from error
-                self._json(HTTPStatus.OK, service.dispatch_live(client, data))
+                self._json(HTTPStatus.OK, service.dispatch_live(
+                    client, data, controller_id=controller_id
+                ))
             elif method == "POST" and path == "/api/products":
                 self._json(HTTPStatus.CREATED, service.create_product(self._body()))
             elif method in {"PUT", "PATCH"} and path.startswith("/api/products/"):
@@ -400,10 +437,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             elif path == "/api/templates":
                 self._json(HTTPStatus.OK, {"items": service.list_templates(search=self._single(query, "search"))})
             elif path == "/api/vendor/templates":
-                if query:
-                    raise ValidationError("Vendor template catalog does not accept query parameters")
+                client, _controller_id = self._required_vendor_target(server, query)
                 self._json(HTTPStatus.OK, {
-                    "items": service.vendor_style_catalog(self._vendor_client(server))
+                    "items": service.vendor_style_catalog(
+                        client, controller_id=_controller_id
+                    )
                 })
             elif path.startswith("/api/vendor/templates/"):
                 parts = path.removeprefix("/api/vendor/templates/").split("/")
@@ -411,28 +449,32 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if re.fullmatch(r"\d{1,10}", raw_id) is None:
                     raise ValidationError("Invalid style id", details={"field": "style_id"})
                 style_id = int(raw_id)
-                if style_id > 2_147_483_647 or query:
+                if style_id > 2_147_483_647:
                     raise ValidationError("Invalid style id", details={"field": "style_id"})
-                client = self._vendor_client(server)
+                client, controller_id = self._required_vendor_target(server, query)
                 if len(parts) == 1:
-                    self._json(HTTPStatus.OK, service.vendor_style_detail(client, style_id))
+                    self._json(HTTPStatus.OK, service.vendor_style_detail(
+                        client, style_id, controller_id=controller_id
+                    ))
                 elif parts == [raw_id, "preview"]:
                     self._binary_image(*service.vendor_template_preview(client, style_id))
                 else:
                     raise NotFoundError("Route not found")
             elif path == "/api/vendor/photos":
-                if query:
-                    raise ValidationError("Vendor photo catalog does not accept query parameters")
+                client, controller_id = self._required_vendor_target(server, query)
                 self._json(HTTPStatus.OK, {
-                    "items": service.vendor_photos(self._vendor_client(server))
+                    "items": service.vendor_photos(
+                        client, controller_id=controller_id
+                    )
                 })
             elif path.startswith("/api/vendor/photos/"):
                 parts = path.removeprefix("/api/vendor/photos/").split("/")
-                if len(parts) != 2 or parts[1] != "data" or query:
+                if len(parts) != 2 or parts[1] != "data":
                     raise NotFoundError("Route not found")
                 photo_name = unquote(parts[0])
+                client, _controller_id = self._required_vendor_target(server, query)
                 self._binary_image(*service.vendor_photo_data(
-                    self._vendor_client(server), photo_name
+                    client, photo_name
                 ))
             elif path == "/api/jobs":
                 self._json(HTTPStatus.OK, {"items": service.list_jobs(status=self._single(query, "status"))})
@@ -467,6 +509,7 @@ def create_server(host: str = "127.0.0.1", port: int = 0, *,
                   database_path: str | Path | None = None, seed: bool = True,
                   service: Service | None = None,
                   vendor_client: VendorClient | None = None,
+                  controller_registry: ControllerRegistry | None = None,
                   static_root: str | Path | None = None,
                   api_token: str | None = None) -> EslHTTPServer:
     """Create, but do not start, a threaded API server."""
@@ -478,5 +521,9 @@ def create_server(host: str = "127.0.0.1", port: int = 0, *,
         if seed:
             storage.seed_demo()
         service = Service(storage)
+    if controller_registry is not None:
+        service.storage.configure_controllers(controller_registry.metadata())
     root = Path(static_root) if static_root is not None else None
-    return EslHTTPServer((host, port), ApiHandler, service, vendor_client, root, api_token)
+    return EslHTTPServer(
+        (host, port), ApiHandler, service, vendor_client, controller_registry, root, api_token
+    )

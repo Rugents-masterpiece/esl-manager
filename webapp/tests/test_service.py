@@ -1,9 +1,10 @@
 import copy
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from esl_web.service import ConflictError, IntegrationError, NotFoundError, Service, ValidationError
 from esl_web.storage import Storage
@@ -43,6 +44,23 @@ class ServiceTests(unittest.TestCase):
             client.get_extended_tags.return_value = case["extended"]
             with self.subTest(case=case), self.assertRaises(IntegrationError):
                 self.service.sync_read_only(client)
+
+    def test_sync_audit_is_controller_distinguishable(self):
+        client = Mock()
+        client.get_routers.return_value = []
+        client.get_templates.return_value = []
+        client.get_tags.return_value = []
+        client.get_style_catalog.return_value = []
+        client.get_extended_tags.return_value = []
+
+        self.service.sync_read_only(client, controller_id="north")
+        self.service.sync_read_only(client, controller_id="south")
+
+        events = self.service.list_audit(action="vendor.sync.read_only")
+        self.assertEqual(
+            {(event["entity_id"], event["details"]["controller_id"]) for event in events},
+            {("north:vendor", "north"), ("south:vendor", "south")},
+        )
 
     def test_schema_migration_preserves_existing_template_and_tag_rows(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -129,11 +147,41 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.service.list_routers(status="online")), 1)
         self.assertEqual(len(self.service.list_templates(search="základ")), 1)
         self.assertEqual(len(self.service.list_alerts(active=True)), 1)
-
         self.service.unbind_tag("prod-tea", "tag-002")
         self.assertIsNone(self.service.get_tag("tag-002")["product_id"])
         with self.assertRaises(NotFoundError):
             self.service.unbind_tag("prod-tea", "tag-002")
+
+    def test_live_dispatch_updates_only_the_selected_controller_scope(self):
+        with self.storage.connection() as connection:
+            connection.execute("UPDATE controllers SET is_default = 0")
+            connection.executemany(
+                "INSERT INTO controllers(id, name, is_default) VALUES (?, ?, ?)",
+                [("north", "North", 1), ("south", "South", 0)],
+            )
+            tag = {
+                "id": "tag-7", "mac": "00:11:22:33:44:77", "label": None,
+                "width": 250, "height": 122, "battery": 80, "rssi": -50,
+                "status": "ready", "router_id": None, "template_id": None,
+                "last_seen_at": None, "vendor_tag_id": 7,
+            }
+            self.storage.upsert_tag(connection, tag, controller_id="north")
+            self.storage.upsert_tag(connection, tag, controller_id="south")
+        client = Mock()
+        client.update_screen.return_value = [
+            {"mac": "00:11:22:33:44:77", "_verified_status": "success"}
+        ]
+        payload = {"confirmation": "I CONFIRM LIVE ESL UPDATE", "updates": [{
+            "mac": "00:11:22:33:44:77", "styleid": 9,
+            "mappingtype": 0, "ABDisplayFlag": 161,
+        }]}
+        with patch.dict(os.environ, {"ESL_LIVE_WRITES": "1"}):
+            self.service.dispatch_live(client, payload, controller_id="south")
+        with self.storage.connection() as connection:
+            self.assertEqual([tuple(row) for row in connection.execute(
+                "SELECT controller_id, status FROM tags "
+                "WHERE mac = '00:11:22:33:44:77' ORDER BY controller_id"
+            )], [("north", "ready"), ("south", "success")])
 
     def test_bulk_jobs_simulate_failures_and_retry_without_vendor_calls(self):
         self.service.bind_tag("prod-tea", "tag-002")
@@ -300,6 +348,17 @@ class ServiceTests(unittest.TestCase):
         event = self.service.list_audit(action="vendor.template.cloned")[0]
         self.assertEqual(event["entity_id"], "200")
         self.assertEqual(event["details"]["source_id"], 145)
+
+    def test_clone_audit_identity_is_controller_distinguishable(self):
+        client = self._clone_client()
+        self.service.clone_vendor_template(client, {
+            "source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
+        }, controller_id="north")
+
+        event = self.service.list_audit(action="vendor.template.cloned")[0]
+        self.assertEqual(event["entity_id"], "north:200")
+        self.assertEqual(event["details"]["controller_id"], "north")
+        self.assertEqual(event["details"]["vendor_template_id"], "200")
 
     def test_clone_populates_an_empty_server_created_template(self):
         client = self._clone_client()
