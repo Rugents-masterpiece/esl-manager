@@ -18,6 +18,7 @@ from .vendor import live_writes_authorized
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+SUPPORTED_TEMPLATE_FAMILIES = {(250, 132, 1), (250, 122, 2), (296, 128, 2)}
 
 
 class ServiceError(Exception):
@@ -531,7 +532,9 @@ class Service:
                 raise IntegrationError("Stored template fields are invalid")
             item["style_fields"] = fields
             vendor_id = str(item.get("vendor_id") or "")
-            supported = (item.get("width"), item.get("height")) in SUPPORTED_DEVICE_MODELS.values()
+            supported = (
+                item.get("width"), item.get("height"), item.get("screen_type")
+            ) in SUPPORTED_TEMPLATE_FAMILIES
             item["preview_url"] = (
                 f"/api/vendor/templates/{int(vendor_id)}/preview?"
                 f"controller_id={quote(str(item['controller_id']), safe='')}"

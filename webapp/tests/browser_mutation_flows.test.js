@@ -53,6 +53,26 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     if (response.exceptionDetails) throw new Error(response.exceptionDetails.text);
     return response.result.value;
   };
+  const pointerClick = async (expression, count = 1) => {
+    const response = await call("Runtime.evaluate", {
+      expression: `(() => { const target = (${expression}); if (target) target.scrollIntoView({ block: "center", inline: "center" }); return target; })()`,
+      contextId: activeContextId,
+      returnByValue: false,
+    });
+    if (response.exceptionDetails) throw new Error(response.exceptionDetails.text);
+    const objectId = response.result.objectId;
+    assert.ok(objectId, `pointer target must resolve to an element: ${expression}`);
+    const box = await call("DOM.getBoxModel", { objectId });
+    await call("Runtime.releaseObject", { objectId });
+    const quad = box.model.content;
+    const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+    const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+    await call("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    for (let click = 0; click < count; click += 1) {
+      await call("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+      await call("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+    }
+  };
   const waitFor = async (expression) => {
     for (let attempt = 0; attempt < 80; attempt += 1) {
       try {
@@ -113,7 +133,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   };
 
   console.error("enabling domains");
-  await call("Page.enable"); await call("Runtime.enable"); await call("Log.enable");
+  await call("Page.enable"); await call("Runtime.enable"); await call("DOM.enable"); await call("Log.enable");
   const expectedOrigin = new URL(base).origin;
   for (let attempt = 0; attempt < 80 && !activeContextId; attempt += 1) {
     const context = [...executionContexts.values()].find((candidate) => (
@@ -131,13 +151,14 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   console.error("app ready");
 
   await installDelayedMutation();
+  await pointerClick('byId("add-tag")');
+  assert.equal(await evaluate(`document.activeElement === byId("new-controller")`), true);
   await evaluate(`(() => {
-    byId("add-tag").focus(); byId("add-tag").click();
     byId("new-router").value = byId("new-router").options[1].value;
     byId("new-template").value = byId("new-template").options[1].value;
     byId("new-mac").value = "AA:BB:CC:DD:EE:99";
-    byId("save-new-tag").focus(); byId("tag-form").requestSubmit();
   })()`);
+  await pointerClick('byId("save-new-tag")');
   console.error("create submitted");
   await waitFor(`typeof window.__releaseMutation === "function"`);
   console.error("create delayed");
@@ -149,11 +170,10 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert.equal(await evaluate(`document.activeElement === byId("add-tag")`), true);
 
   await installDelayedMutation();
-  await evaluate(`(() => {
-    const row = document.querySelector(".tag-row"); row.focus(); row.click();
-  })()`);
+  await pointerClick('document.querySelector(".tag-row")');
   await waitFor(`byId("detail-id").value !== ""`);
-  await evaluate(`byId("save-tag-detail").focus(); byId("tag-detail-form").requestSubmit()`);
+  assert.equal(await evaluate(`byId("tag-drawer").contains(document.activeElement)`), true);
+  await pointerClick('byId("save-tag-detail")');
   await waitFor(`typeof window.__releaseMutation === "function"`);
   await assertBusyClosePaths("tag-drawer");
   await releaseAndAssertAuthFocus("save-tag-detail");
@@ -163,6 +183,10 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   await evaluate(`location.hash = "templates"`);
   await waitFor(`!byId("view-templates").hidden && document.querySelector("[data-clone-id]:not(:disabled)")`);
+  const familyCards = await evaluate(`[...document.querySelectorAll("#templates-grid .card h2")].map((node) => node.textContent)`);
+  assert.equal(familyCards.includes("Základná cenovka"), true);
+  assert.equal(familyCards.includes("Wrong 250 EPD"), false);
+  assert.equal(familyCards.includes("Wrong 296 TFT"), false);
   await waitFor(`document.querySelector(".template-preview img") || document.querySelector(".template-preview .template-screen")`);
   const previewState = await evaluate(`(() => {
     const image = document.querySelector(".template-preview img");
@@ -174,13 +198,13 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert.equal(previewState.fallback, true);
   assert.equal(previewState.image, false);
   await installDelayedMutation();
+  await pointerClick('document.querySelector("[data-clone-id]:not(:disabled)")');
+  assert.equal(await evaluate(`document.activeElement === byId("clone-target-controller")`), true);
   await evaluate(`(() => {
-    const clone = document.querySelector("[data-clone-id]:not(:disabled)"); clone.focus(); clone.click();
     byId("clone-target-name").value = "Browser 401 clone";
     byId("clone-confirm").checked = true; updateCloneButton();
-    byId("clone-submit").focus(); byId("clone-form").requestSubmit();
-    byId("clone-form").requestSubmit();
   })()`);
+  await pointerClick('byId("clone-submit")', 2);
   await waitFor(`typeof window.__releaseMutation === "function"`);
   await assertBusyClosePaths("clone-modal");
   await releaseAndAssertAuthFocus("clone-submit");
@@ -190,15 +214,16 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert.equal(await evaluate(`document.activeElement === document.querySelector("[data-clone-id]:not(:disabled)")`), true);
 
   await installDelayedMutation("/api/session");
+  await pointerClick('byId("auth-button")');
+  assert.equal(await evaluate(`document.activeElement === byId("auth-token")`), true);
+  assert.equal(await evaluate(`focusManager.openers.get(byId("auth-modal")) === byId("auth-button")`), true);
   await evaluate(`(() => {
-    byId("auth-button").focus(); byId("auth-button").click();
-    if (document.activeElement !== byId("auth-token")) throw new Error("auth token focus missing");
-    if (focusManager.openers.get(byId("auth-modal")) !== byId("auth-button")) throw new Error("auth opener missing");
     byId("auth-token").value = ${JSON.stringify("B".repeat(64))};
-    byId("auth-submit").focus(); byId("auth-form").requestSubmit();
   })()`);
+  await pointerClick('byId("auth-submit")', 2);
   await waitFor(`typeof window.__releaseMutation === "function"`);
   await assertBusyClosePaths("auth-modal");
+  assert.equal(await evaluate(`window.__mutationCounts["POST /api/session"]`), 1);
   await evaluate(`window.__releaseMutation()`);
   await waitFor(`!byId("auth-submit").disabled && !byId("auth-form-error").hidden`);
   assert.equal(await evaluate(`byId("auth-modal").open`), true);

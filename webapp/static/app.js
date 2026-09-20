@@ -1,11 +1,6 @@
 "use strict";
 
-const MODELS = Object.freeze({
-  "2.13TFT-BW": { label: "250 × 132 TFT", width: 250, height: 132 },
-  "2.13EPD-BWR": { label: "250 × 122 EPD", width: 250, height: 122 },
-  "2.9EPD-BWR": { label: "296 × 128 EPD", width: 296, height: 128 },
-});
-const SUPPORTED_DIMENSIONS = new Set(Object.values(MODELS).map((model) => `${model.width}x${model.height}`));
+const MODELS = TemplateFamilies.models;
 const statusLabels = { ready: "Pripravená", updating: "Aktualizuje sa", success: "Úspešná", failed: "Chyba", online: "Online", offline: "Offline" };
 const state = { controllers: [], tags: [], templates: [], routers: [], audit: [], activeView: "tags", inventoryLoaded: false };
 const cloneGuard = new CloneSubmissionGuard();
@@ -152,7 +147,7 @@ function dependentOptions(prefix, controllerId, modelId, selectedRouter = "", se
   const template = byId(`${prefix}-template`);
   const dimensions = MODELS[modelId];
   const routers = state.routers.filter((item) => item.controller_id === controllerId);
-  const templates = state.templates.filter((item) => item.controller_id === controllerId && dimensions && item.width === dimensions.width && item.height === dimensions.height);
+  const templates = state.templates.filter((item) => item.controller_id === controllerId && TemplateFamilies.matchesModel(item, dimensions));
   router.replaceChildren(element("option", { value: "", text: routers.length ? "Vyberte RF router" : "Žiadny RF router" }), ...routers.map((item) => element("option", { value: item.id, text: `${item.name} — ${item.address}` })));
   template.replaceChildren(element("option", { value: "", text: templates.length ? "Vyberte šablónu" : "Žiadna kompatibilná šablóna" }), ...templates.map((item) => element("option", { value: item.id, text: item.name })));
   router.value = routers.some((item) => item.id === selectedRouter) ? selectedRouter : "";
@@ -304,11 +299,10 @@ async function createTag(event) {
 }
 
 function templateFamily(template) {
-  const key = `${template.width}x${template.height}`;
-  return Object.values(MODELS).find((model) => `${model.width}x${model.height}` === key)?.label || null;
+  return TemplateFamilies.label(template);
 }
 function renderTemplates() {
-  const items = scoped(state.templates).filter((item) => SUPPORTED_DIMENSIONS.has(`${item.width}x${item.height}`));
+  const items = scoped(state.templates).filter(TemplateFamilies.supports);
   const cards = items.map((template) => {
     const preview = element("div", { className: "template-preview" });
     renderTemplatePreview(preview, template, templateFamily(template), element);
@@ -321,7 +315,7 @@ function renderTemplates() {
   setMessage("templates-state", cards.length ? "" : "Nepodporované rozmery sú zámerne skryté; inventár sa nemení.");
 }
 function populateCloneSources(controllerId, selectedId = "") {
-  const options = state.templates.filter((item) => item.controller_id === controllerId && SUPPORTED_DIMENSIONS.has(`${item.width}x${item.height}`) && Number.isInteger(Number(item.vendor_id)) && Number(item.vendor_id) > 0);
+  const options = state.templates.filter((item) => item.controller_id === controllerId && TemplateFamilies.supports(item) && Number.isInteger(Number(item.vendor_id)) && Number(item.vendor_id) > 0);
   byId("clone-source-template").replaceChildren(element("option", { value: "", text: options.length ? "Vyberte zdroj" : "Žiadna klonovateľná šablóna" }), ...options.map((item) => element("option", { value: String(item.vendor_id), text: `${item.name} · ${templateFamily(item)}` })));
   if (options.some((item) => item.id === selectedId)) byId("clone-source-template").value = String(options.find((item) => item.id === selectedId).vendor_id);
 }
@@ -380,7 +374,7 @@ function renderControllers() {
   const cards = state.controllers.map((controller) => {
     const tags = state.tags.filter((item) => item.controller_id === controller.id);
     const supported = tags.filter((item) => item.management_supported).length;
-    return element("article", { className: "card" }, [element("p", { className: "eyebrow", text: controller.default ? "PREDVOLENÝ CONTROLLER" : "CONTROLLER" }), element("h2", { text: controller.name }), definitionList([["ID", controller.id], ["Base URL", controller.base_url || "Lokálny / nezverejnený"], ["Cenovky", tags.length], ["Podporované", supported], ["Historické nepodporované", tags.length - supported], ["RF routery", state.routers.filter((item) => item.controller_id === controller.id).length], ["Podporované šablóny", state.templates.filter((item) => item.controller_id === controller.id && SUPPORTED_DIMENSIONS.has(`${item.width}x${item.height}`)).length]])]);
+    return element("article", { className: "card" }, [element("p", { className: "eyebrow", text: controller.default ? "PREDVOLENÝ CONTROLLER" : "CONTROLLER" }), element("h2", { text: controller.name }), definitionList([["ID", controller.id], ["Base URL", controller.base_url || "Lokálny / nezverejnený"], ["Cenovky", tags.length], ["Podporované", supported], ["Historické nepodporované", tags.length - supported], ["RF routery", state.routers.filter((item) => item.controller_id === controller.id).length], ["Podporované šablóny", state.templates.filter((item) => item.controller_id === controller.id && TemplateFamilies.supports(item)).length]])]);
   });
   byId("controllers-grid").replaceChildren(...(cards.length ? cards : [empty("Nie je nakonfigurovaný žiadny controller.")]));
   setMessage("controllers-state", cards.length ? "" : "Prázdny zoznam controllerov.");

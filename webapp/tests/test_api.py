@@ -54,7 +54,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in tags["items"]], ["tag-002"])
         with self.server.service.storage.connection() as connection:
             connection.execute(
-                "UPDATE templates SET vendor_id = '145' WHERE id = 'tpl-default'"
+                "UPDATE templates SET vendor_id = '145', screen_type = 2 "
+                "WHERE id = 'tpl-default'"
             )
         _, _, templates = self.request("GET", "/api/templates")
         self.assertEqual(
@@ -64,6 +65,34 @@ class ApiTests(unittest.TestCase):
         for path in ("/api/routers", "/api/templates", "/api/jobs", "/api/alerts", "/api/audit"):
             _, _, result = self.request("GET", path)
             self.assertIsInstance(result["items"], list)
+
+    def test_template_api_preview_requires_exact_supported_screen_family(self):
+        with self.server.service.storage.connection() as connection:
+            connection.executemany(
+                "INSERT INTO templates(id, controller_id, vendor_id, name, width, height, "
+                "mapping_type, screen_type) VALUES (?, 'legacy', ?, ?, ?, ?, 0, ?)",
+                [
+                    ("exact-tft", "201", "Exact TFT", 250, 132, 1),
+                    ("wrong-tft", "202", "Wrong EPD", 250, 132, 2),
+                    ("exact-epd", "203", "Exact EPD", 296, 128, 2),
+                    ("wrong-epd", "204", "Wrong TFT", 296, 128, 1),
+                    ("missing-type", "205", "Missing type", 296, 128, None),
+                ],
+            )
+
+        _, _, payload = self.request("GET", "/api/templates")
+        templates = {item["id"]: item for item in payload["items"]}
+        self.assertEqual(
+            templates["exact-tft"]["preview_url"],
+            "/api/vendor/templates/201/preview?controller_id=legacy",
+        )
+        self.assertEqual(
+            templates["exact-epd"]["preview_url"],
+            "/api/vendor/templates/203/preview?controller_id=legacy",
+        )
+        for template_id in ("wrong-tft", "wrong-epd", "missing-type"):
+            with self.subTest(template_id=template_id):
+                self.assertIsNone(templates[template_id]["preview_url"])
 
     def test_tag_collection_can_explicitly_include_unsupported_historical_inventory(self):
         with self.server.service.storage.connection() as connection:

@@ -126,12 +126,18 @@ class ServiceTests(unittest.TestCase):
     def test_template_list_exposes_only_safe_vendor_preview_urls(self):
         with self.storage.connection() as connection:
             connection.execute(
-                "UPDATE templates SET vendor_id = '145' WHERE id = 'tpl-default'"
+                "UPDATE templates SET vendor_id = '145', screen_type = 2 "
+                "WHERE id = 'tpl-default'"
             )
-            connection.execute(
+            connection.executemany(
                 "INSERT INTO templates(id, controller_id, vendor_id, name, width, height, "
-                "mapping_type) VALUES ('local-template', 'legacy', 'local-template', "
-                "'Lokálna', 296, 128, 0)"
+                "mapping_type, screen_type) VALUES (?, 'legacy', ?, ?, ?, ?, 0, ?)",
+                [
+                    ("local-template", "local-template", "Lokálna", 296, 128, 2),
+                    ("wrong-tft", "146", "250 × 132 wrong EPD", 250, 132, 2),
+                    ("wrong-epd", "147", "296 × 128 wrong TFT", 296, 128, 1),
+                    ("missing-type", "148", "296 × 128 missing type", 296, 128, None),
+                ],
             )
         templates = {item["id"]: item for item in self.service.list_templates()}
         self.assertEqual(
@@ -139,6 +145,9 @@ class ServiceTests(unittest.TestCase):
             "/api/vendor/templates/145/preview?controller_id=legacy",
         )
         self.assertIsNone(templates["local-template"]["preview_url"])
+        self.assertIsNone(templates["wrong-tft"]["preview_url"])
+        self.assertIsNone(templates["wrong-epd"]["preview_url"])
+        self.assertIsNone(templates["missing-type"]["preview_url"])
 
     def test_vendor_sync_preserves_unsupported_tag_dimensions_as_read_only(self):
         client = Mock()

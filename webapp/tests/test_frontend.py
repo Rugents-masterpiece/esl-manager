@@ -46,6 +46,29 @@ class MarkerParser(HTMLParser):
 
 
 class FrontendSourceTests(unittest.TestCase):
+    def test_template_families_require_exact_dimensions_and_screen_type(self):
+        result = subprocess.run(
+            ["node", str(WEBAPP / "tests" / "template_family.test.js")],
+            cwd=WEBAPP, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_browser_flow_uses_cdp_pointer_actions_for_initiating_controls(self):
+        script = (WEBAPP / "tests" / "browser_mutation_flows.test.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('call("DOM.getBoxModel"', script)
+        self.assertIn('call("Input.dispatchMouseEvent", { type: "mousePressed"', script)
+        self.assertIn('call("Input.dispatchMouseEvent", { type: "mouseReleased"', script)
+        self.assertNotIn("requestSubmit", script)
+        for forbidden in (
+            'byId("auth-button").focus()',
+            'byId("save-new-tag").focus()',
+            'byId("save-tag-detail").focus()',
+            'byId("clone-submit").focus()',
+        ):
+            self.assertNotIn(forbidden, script)
+
     def test_clone_guard_blocks_a_second_post_while_first_is_pending(self):
         result = subprocess.run(
             ["node", str(WEBAPP / "tests" / "clone_guard.test.js")],
@@ -99,7 +122,7 @@ class FrontendSourceTests(unittest.TestCase):
         self.assertEqual(parser.scripts, [
             "/static/clone-guard.js", "/static/detail-guard.js",
             "/static/dialog-focus.js", "/static/dialog-operation-guard.js",
-            "/static/template-preview.js", "/static/app.js",
+            "/static/template-family.js", "/static/template-preview.js", "/static/app.js",
         ])
         self.assertEqual(parser.stylesheets, ["/static/styles.css"])
         self.assertIn('<link rel="icon" href="data:,">', (STATIC / "index.html").read_text(encoding="utf-8"))
@@ -152,8 +175,9 @@ class FrontendSourceTests(unittest.TestCase):
 
     def test_source_encodes_models_clone_confirmation_token_cleanup_and_focus_return(self):
         script = (STATIC / "app.js").read_text(encoding="utf-8")
+        family_script = (STATIC / "template-family.js").read_text(encoding="utf-8")
         for model in ("2.13TFT-BW", "2.13EPD-BWR", "2.9EPD-BWR"):
-            self.assertIn(model, script)
+            self.assertIn(model, family_script)
         for field in (
             "source_controller_id", "source_template_id", "target_controller_id", "target_name",
         ):
@@ -215,6 +239,7 @@ class StaticServerTests(unittest.TestCase):
             ("/static/detail-guard.js", "text/javascript", b"DetailLoadGuard"),
             ("/static/dialog-focus.js", "text/javascript", b"DialogFocusManager"),
             ("/static/dialog-operation-guard.js", "text/javascript", b"DialogOperationGuard"),
+            ("/static/template-family.js", "text/javascript", b"TemplateFamilies"),
             ("/static/template-preview.js", "text/javascript", b"renderTemplatePreview"),
             ("/static/app.js", "text/javascript", b"textContent"),
         )
@@ -248,7 +273,16 @@ class BrowserDomIntegrationTests(unittest.TestCase):
             )
             with server.service.storage.connection() as connection:
                 connection.execute(
-                    "UPDATE templates SET vendor_id = '1' WHERE id = 'tpl-default'"
+                    "UPDATE templates SET vendor_id = '1', screen_type = 2 "
+                    "WHERE id = 'tpl-default'"
+                )
+                connection.executemany(
+                    "INSERT INTO templates(id, controller_id, vendor_id, name, width, height, "
+                    "mapping_type, screen_type) VALUES (?, 'legacy', ?, ?, ?, ?, 0, ?)",
+                    [
+                        ("wrong-250-epd", "2", "Wrong 250 EPD", 250, 132, 2),
+                        ("wrong-296-tft", "3", "Wrong 296 TFT", 296, 128, 1),
+                    ],
                 )
             server_thread = threading.Thread(target=server.serve_forever, daemon=True)
             server_thread.start()
