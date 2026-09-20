@@ -262,10 +262,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                 server.sessions.pop(key, None)
             expiry = server.sessions.get(session_id or "")
             if expiry is None:
+                self.close_connection = True
                 raise UnauthorizedError("Authentication required")
         origin = self.headers.get("Origin")
         host = self.headers.get("Host")
         if origin and origin not in {f"http://{host}", f"https://{host}"}:
+            self.close_connection = True
             raise ForbiddenError("Cross-origin API mutation is forbidden")
 
     def _create_session(self, server: EslHTTPServer) -> None:
@@ -464,6 +466,30 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"mode": mode, "status": "ok"})
             elif path == "/api/dashboard":
                 self._json(HTTPStatus.OK, service.dashboard())
+            elif path == "/api/controllers":
+                registry_metadata = (
+                    server.controller_registry.metadata()
+                    if server.controller_registry is not None else []
+                )
+                controllers = [{
+                    "id": item["id"],
+                    "name": item["name"],
+                    "base_url": item.get("base_url"),
+                    "default": bool(item.get("default")),
+                } for item in registry_metadata]
+                configured_ids = {item["id"] for item in controllers}
+                with service.storage.connection() as connection:
+                    stored = connection.execute(
+                        "SELECT id, name, is_default FROM controllers "
+                        "ORDER BY is_default DESC, name, id"
+                    ).fetchall()
+                controllers.extend({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "base_url": None,
+                    "default": bool(row["is_default"]),
+                } for row in stored if row["id"] not in configured_ids)
+                self._json(HTTPStatus.OK, {"items": controllers})
             elif path == "/api/products":
                 items = service.list_products(
                     search=self._single(query, "search"), tag_id=self._single(query, "tag_id")
@@ -481,6 +507,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     status=self._single(query, "status"),
                     router_id=self._single(query, "router_id"),
                     bound=self._boolean(query, "bound"),
+                    include_unsupported=self._boolean(query, "include_unsupported") or False,
                 )
                 self._json(HTTPStatus.OK, {"items": items})
             elif path.startswith("/api/tags/"):

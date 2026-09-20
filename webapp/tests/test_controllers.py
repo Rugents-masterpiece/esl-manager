@@ -58,6 +58,48 @@ class ControllerRegistryTests(unittest.TestCase):
         self.assertNotIn("north-secret", serialized)
         self.assertNotIn("north-user", serialized)
 
+    def test_public_controller_api_exposes_only_safe_metadata(self):
+        controllers = [
+            {"id": "north", "name": "North", "base_url": "http://127.0.0.1/north",
+             "username": "north-user", "password": "north-secret"},
+            {"id": "south", "name": "South", "base_url": "http://127.0.0.1/south",
+             "username": "south-user", "password": "south-secret"},
+        ]
+        registry = ControllerRegistry(controllers, "north")
+        safe_metadata = registry.metadata()
+        registry.metadata = lambda: [
+            {**item, "future_private_field": "must-not-leak"} for item in safe_metadata
+        ]
+        server = create_server(
+            "127.0.0.1", 0, database_path=Path(self.temporary.name) / "public.db",
+            seed=False, controller_registry=registry,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with urlopen(
+                f"http://127.0.0.1:{server.server_port}/api/controllers", timeout=2
+            ) as response:
+                self.assertEqual(response.status, 200)
+                payload = json.loads(response.read())
+            self.assertEqual(payload["items"], [
+                {"id": "north", "name": "North", "base_url": "http://127.0.0.1/north",
+                 "default": True},
+                {"id": "south", "name": "South", "base_url": "http://127.0.0.1/south",
+                 "default": False},
+                {"id": "legacy", "name": "Legacy controller", "base_url": None,
+                 "default": False},
+            ])
+            for item in payload["items"]:
+                self.assertEqual(set(item), {"id", "name", "base_url", "default"})
+            serialized = json.dumps(payload)
+            for secret in ("north-user", "north-secret", "south-user", "south-secret"):
+                self.assertNotIn(secret, serialized)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_controller_entry_can_declare_the_single_explicit_default(self):
         self.write_settings({
             "api_token": "A" * 64, "live_writes": False,

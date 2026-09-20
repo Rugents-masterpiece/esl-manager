@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -382,6 +383,41 @@ class Storage:
             ).upper()
         return value
 
+    @classmethod
+    def standard_mac_identity(cls, value: str) -> str | None:
+        """Return a canonical 48-bit MAC only for recognized standard syntax."""
+        text = value.strip()
+        patterns = (
+            r"[0-9A-Fa-f]{12}",
+            r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}",
+            r"(?:[0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}",
+            r"(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}",
+        )
+        if any(re.fullmatch(pattern, text) for pattern in patterns):
+            return cls.normalized_mac(text)
+        return None
+
+    @classmethod
+    def normalized_vendor_tag_identity(cls, value: str) -> str:
+        """Canonicalize vendor uint32 IDs without reinterpreting local 48-bit MACs."""
+        text = value.strip()
+        standard_mac = cls.standard_mac_identity(text)
+        if standard_mac is not None:
+            return standard_mac
+        if re.fullmatch(r"[0-9]+", text):
+            if len(text) > 10:
+                raise sqlite3.IntegrityError("Invalid vendor tag identity")
+            number = int(text)
+            if number > 0xFFFFFFFF:
+                raise sqlite3.IntegrityError("Invalid vendor tag identity")
+            return ".".join(str(octet) for octet in number.to_bytes(4, "big"))
+        dotted = text.split(".")
+        if (len(dotted) == 4
+                and all(re.fullmatch(r"[0-9]{1,3}", part) is not None for part in dotted)
+                and all(int(part) <= 255 for part in dotted)):
+            return ".".join(str(int(part)) for part in dotted)
+        raise sqlite3.IntegrityError("Invalid vendor tag identity")
+
     @staticmethod
     def _execute_statements(connection: sqlite3.Connection, statements: str) -> None:
         """Execute simple schema statements without executescript's implicit commit."""
@@ -570,13 +606,21 @@ class Storage:
         raw_vendor_id = tag.get("vendor_tag_id")
         positive_vendor_id = raw_vendor_id not in (None, "", 0, "0")
         base_vendor_id = str(raw_vendor_id) if positive_vendor_id else str(tag["id"])
-        mac = self.normalized_mac(tag["mac"])
-        existing = connection.execute(
-            "SELECT id, vendor_id FROM tags WHERE controller_id = ? AND mac = ?",
-            (controller_id, mac),
-        ).fetchone()
+        mac = self.normalized_vendor_tag_identity(tag["mac"])
+        matching = [
+            row for row in connection.execute(
+                "SELECT id, vendor_id, mac FROM tags WHERE controller_id = ?",
+                (controller_id,),
+            ).fetchall()
+            if self.normalized_vendor_tag_identity(row["mac"]) == mac
+        ]
+        if len(matching) > 1:
+            raise sqlite3.IntegrityError("Normalized tag MAC collision")
+        existing = matching[0] if matching else None
         if existing is not None:
-            local_id, vendor_id = existing
+            local_id, vendor_id = existing["id"], existing["vendor_id"]
+            if existing["mac"] != mac:
+                connection.execute("UPDATE tags SET mac = ? WHERE id = ?", (mac, local_id))
         else:
             vendor_id = base_vendor_id
             disambiguated_identity = self._disambiguated_tag_vendor_id(

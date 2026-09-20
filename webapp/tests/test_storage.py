@@ -474,6 +474,12 @@ class StorageTests(unittest.TestCase):
                     "battery, rssi, status) VALUES "
                     "('kept', 'legacy', 'vendor-7', 'aa-bb-cc-dd-ee-ff', 296, 128, 80, -50, 'ready')"
                 )
+                connection.execute(
+                    "INSERT INTO tags(id, controller_id, vendor_id, mac, width, height, "
+                    "battery, rssi, status) VALUES "
+                    "('numeric-mac', 'legacy', 'vendor-8', '000000000001', 296, 128, "
+                    "80, -50, 'ready')"
+                )
                 connection.commit()
 
             storage = Storage(database)
@@ -489,6 +495,9 @@ class StorageTests(unittest.TestCase):
                 self.assertEqual(tuple(row), (
                     "kept", "AA:BB:CC:DD:EE:FF", "2.9EPD-BWR", "vendor", "vendor", "{}",
                 ))
+                self.assertEqual(connection.execute(
+                    "SELECT mac FROM tags WHERE id = 'numeric-mac'"
+                ).fetchone()[0], "00:00:00:00:00:01")
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_v2_normalized_mac_collision_rolls_back_schema_and_version(self):
@@ -588,6 +597,36 @@ class StorageTests(unittest.TestCase):
                 self.assertEqual(tuple(row), (
                     "2.13EPD-BWR", "vendor", "local", '{"price":"1.00"}', 70, -60,
                 ))
+
+    def test_vendor_upsert_keeps_12_digit_mac_distinct_from_uint32_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Storage(Path(directory) / "vendor-identities.db")
+            storage.initialize()
+            base = {
+                "label": "Vendor", "width": 296, "height": 128, "battery": 80,
+                "rssi": -50, "status": "ready", "router_id": None,
+                "template_id": None, "last_seen_at": None,
+            }
+            with storage.connection() as connection:
+                storage.upsert_tag(connection, {
+                    **base, "id": "mac", "vendor_tag_id": 11, "mac": "000000000001",
+                })
+                storage.upsert_tag(connection, {
+                    **base, "id": "uint32", "vendor_tag_id": 12, "mac": "1",
+                })
+                rows = [tuple(row) for row in connection.execute(
+                    "SELECT id, mac FROM tags ORDER BY id"
+                )]
+                for malformed in (
+                        "9" * 5000, "4294967296", "١", "abc", "-1", "1.2.3",
+                        "1.2.3.256", "1.2.3.4.5", "00:00-00:00:00:01", ""):
+                    with self.subTest(malformed=malformed), self.assertRaises(sqlite3.IntegrityError):
+                        storage.upsert_tag(connection, {
+                            **base, "id": "invalid", "vendor_tag_id": 13, "mac": malformed,
+                        })
+            self.assertEqual(rows, [
+                ("mac", "00:00:00:00:00:01"), ("uint32", "0.0.0.1"),
+            ])
 
     def test_schema_and_demo_seed_are_complete_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:

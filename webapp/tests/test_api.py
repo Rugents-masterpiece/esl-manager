@@ -52,9 +52,33 @@ class ApiTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in products["items"]], ["prod-coffee"])
         _, _, tags = self.request("GET", "/api/tags?status=failed&bound=false")
         self.assertEqual([item["id"] for item in tags["items"]], ["tag-002"])
+        with self.server.service.storage.connection() as connection:
+            connection.execute(
+                "UPDATE templates SET vendor_id = '145' WHERE id = 'tpl-default'"
+            )
+        _, _, templates = self.request("GET", "/api/templates")
+        self.assertEqual(
+            templates["items"][0]["preview_url"],
+            "/api/vendor/templates/145/preview?controller_id=legacy",
+        )
         for path in ("/api/routers", "/api/templates", "/api/jobs", "/api/alerts", "/api/audit"):
             _, _, result = self.request("GET", path)
             self.assertIsInstance(result["items"], list)
+
+    def test_tag_collection_can_explicitly_include_unsupported_historical_inventory(self):
+        with self.server.service.storage.connection() as connection:
+            connection.execute(
+                "INSERT INTO tags(id, controller_id, vendor_id, mac, label, width, height, "
+                "battery, rssi, status, device_model_id) "
+                "VALUES ('historical-1x1', 'legacy', 'old-1', 'opaque-old', 'Historická', "
+                "1, 1, 0, 0, 'ready', NULL)"
+            )
+        _, _, regular = self.request("GET", "/api/tags")
+        self.assertNotIn("historical-1x1", {item["id"] for item in regular["items"]})
+        _, _, complete = self.request("GET", "/api/tags?include_unsupported=true")
+        item = next(item for item in complete["items"] if item["id"] == "historical-1x1")
+        self.assertFalse(item["management_supported"])
+        self.assertEqual(item["device_model_state"], "unsupported")
 
     def test_health_reports_live_mode_only_when_writes_are_enabled(self):
         with patch.dict("os.environ", {"ESL_LIVE_WRITES": "1"}):

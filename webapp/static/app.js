@@ -1,588 +1,464 @@
 "use strict";
 
-const state = {
-  products: [], tags: [], templates: [], routers: [], jobs: [], alerts: [], audit: [],
-  selectedTags: new Set(), activeView: "overview",
-};
-
-const viewLoaders = {
-  overview: loadOverview,
-  tags: loadTags,
-  products: loadProducts,
-  templates: loadTemplates,
-  routers: loadRouters,
-  jobs: loadJobs,
-  audit: loadAudit,
-};
-
-const statusLabels = {
-  ready: "Pripravená", updating: "Aktualizuje sa", success: "Úspešná", failed: "Chyba",
-  queued: "Čaká", processing: "Spracúva sa", completed: "Dokončená", partial: "Čiastočne úspešná",
-  succeeded: "Úspešná", online: "Online", offline: "Offline", critical: "Kritický",
-  warning: "Upozornenie", info: "Informácia",
-};
+const MODELS = Object.freeze({
+  "2.13TFT-BW": { label: "250 × 132 TFT", width: 250, height: 132 },
+  "2.13EPD-BWR": { label: "250 × 122 EPD", width: 250, height: 122 },
+  "2.9EPD-BWR": { label: "296 × 128 EPD", width: 296, height: 128 },
+});
+const SUPPORTED_DIMENSIONS = new Set(Object.values(MODELS).map((model) => `${model.width}x${model.height}`));
+const statusLabels = { ready: "Pripravená", updating: "Aktualizuje sa", success: "Úspešná", failed: "Chyba", online: "Online", offline: "Offline" };
+const state = { controllers: [], tags: [], templates: [], routers: [], audit: [], activeView: "tags", inventoryLoaded: false };
+const cloneGuard = new CloneSubmissionGuard();
+const detailGuard = new DetailLoadGuard();
+const focusManager = new DialogFocusManager();
+const dialogOperationGuard = new DialogOperationGuard();
+let cloneBusy = false;
 
 function byId(id) { return document.getElementById(id); }
-
 function element(tag, options = {}, children = []) {
   const node = document.createElement(tag);
   Object.entries(options).forEach(([key, value]) => {
     if (key === "className") node.className = value;
-    else if (key === "text") node.textContent = value == null ? "—" : String(value);
-    else if (key === "dataset") Object.entries(value).forEach(([name, data]) => { node.dataset[name] = data; });
-    else if (key === "attrs") Object.entries(value).forEach(([name, attr]) => node.setAttribute(name, attr));
+    else if (key === "text") node.textContent = value == null || value === "" ? "—" : String(value);
+    else if (key === "attrs") Object.entries(value).forEach(([name, attr]) => node.setAttribute(name, String(attr)));
+    else if (key === "dataset") Object.entries(value).forEach(([name, item]) => { node.dataset[name] = item; });
     else node[key] = value;
   });
   children.filter(Boolean).forEach((child) => node.append(child));
   return node;
 }
-
-function setState(id, message, isError = false) {
-  const node = byId(id);
-  node.textContent = message;
-  node.classList.toggle("error", isError);
+function setMessage(id, message, isError = false) {
+  const node = byId(id); node.textContent = message; node.classList.toggle("error", isError);
 }
-
-function emptyMessage(message) { return element("div", { className: "empty", text: message }); }
-
-function status(value) {
-  return element("span", {
-    className: `status status-${String(value || "unknown").replace(/[^a-z-]/g, "")}`,
-    text: statusLabels[value] || value || "Neznámy",
-  });
-}
-
-function formatDate(value) {
-  if (!value) return "—";
+function empty(message) { return element("div", { className: "empty", text: message }); }
+function safeDate(value) {
+  if (!value) return "Neznámy";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat("sk-SK", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
-
-function formatPrice(value, currency = "EUR") {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "—";
-  try { return new Intl.NumberFormat("sk-SK", { style: "currency", currency: currency || "EUR" }).format(number); }
-  catch (_error) { return `${number.toFixed(2)} ${currency || "EUR"}`; }
+function statusNode(value, supported = true) {
+  const key = supported ? String(value || "unknown") : "unsupported";
+  return element("span", { className: `status status-${key.replace(/[^a-z-]/g, "")}`, text: supported ? (statusLabels[value] || value || "Neznámy") : "Nepodporovaná" });
 }
-
-async function api(path, options = {}) {
-  const config = { ...options, headers: { Accept: "application/json", ...(options.headers || {}) } };
-  if (config.body !== undefined) config.headers["Content-Type"] = "application/json";
-  const response = await fetch(path, config);
-  let payload = null;
-  if (response.status !== 204) {
-    const type = response.headers.get("content-type") || "";
-    payload = type.includes("application/json") ? await response.json() : await response.text();
-  }
-  if (!response.ok) {
-    const error = new Error(payload && payload.error ? payload.error.message : `Požiadavka zlyhala (${response.status})`);
-    error.payload = payload;
-    error.status = response.status;
-    if (response.status === 401 && path !== "/api/session") openAuthModal();
-    throw error;
-  }
-  return payload;
-}
-
-function notify(message, isError = false) {
-  const region = byId("toast-region");
-  const toast = element("div", { className: `toast${isError ? " error" : ""}`, text: message });
-  region.replaceChildren(toast);
-  window.setTimeout(() => { if (toast.isConnected) toast.remove(); }, 5000);
-}
-
-function openAuthModal() {
-  byId("auth-form").reset();
-  byId("auth-form-error").hidden = true;
-  if (!byId("auth-modal").open) byId("auth-modal").showModal();
-  byId("auth-token").focus();
-}
-
-function closeAuthModal() {
-  byId("auth-form").reset();
-  byId("auth-form-error").hidden = true;
-  if (byId("auth-modal").open) byId("auth-modal").close();
-}
-
-async function authenticateForWrites(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  if (!form.reportValidity()) return;
-  const submit = byId("auth-submit");
-  const token = byId("auth-token");
-  submit.disabled = true;
-  submit.textContent = "Prihlasujem…";
-  byId("auth-form-error").hidden = true;
-  try {
-    await api("/api/session", { method: "POST", body: JSON.stringify({ token: token.value }) });
-    closeAuthModal();
-    byId("auth-button").textContent = "Zápis prihlásený";
-    notify("Prihlásenie pre write operácie bolo úspešné.");
-  } catch (error) {
-    const errorBox = byId("auth-form-error");
-    errorBox.textContent = `Prihlásenie zlyhalo: ${error.message}`;
-    errorBox.hidden = false;
-  } finally {
-    token.value = "";
-    submit.disabled = false;
-    submit.textContent = "Prihlásiť";
-  }
-}
-
-function renderTable(targetId, headers, rows) {
-  const target = byId(targetId);
-  if (!rows.length) { target.replaceChildren(emptyMessage("Žiadne záznamy nezodpovedajú výberu.")); return; }
-  const table = element("table");
-  const headRow = element("tr");
-  headers.forEach((label) => headRow.append(element("th", { text: label, attrs: { scope: "col" } })));
-  table.append(element("thead", {}, [headRow]), element("tbody", {}, rows));
-  target.replaceChildren(table);
-}
-
-function makeCell(content, className = "") {
-  const cell = element("td", { className });
-  if (content instanceof Node) cell.append(content);
-  else cell.textContent = content == null || content === "" ? "—" : String(content);
-  return cell;
-}
-
-function actionButton(label, action, itemId, className = "") {
-  return element("button", { type: "button", text: label, className, dataset: { action, id: itemId } });
-}
-
-function setConnection(ok) {
-  byId("app-status").textContent = ok ? "API pripojené" : "API nedostupné";
-  document.querySelector(".status-dot").classList.toggle("error", !ok);
-}
-
-function setOperatingMode(health) {
-  const live = health.mode === "live";
-  const readOnly = health.mode === "read_only";
-  byId("auth-button").hidden = !(live || readOnly);
-  byId("mode-label").textContent = live ? "LIVE" : (readOnly ? "Read-only" : "Simulácia");
-  byId("mode-title").textContent = live ? "LIVE režim" : (readOnly ? "Reálny server — iba na čítanie" : "Simulačný režim");
-  byId("mode-description").textContent = live
-    ? " Fyzické zápisy sú povolené iba s explicitným potvrdením každej požiadavky."
-    : (readOnly ? " Inventár pochádza z reálneho ESL servera. Fyzické zápisy sú vypnuté."
-      : " Zmeny sú lokálne. Žiadny zápis sa neposiela na fyzické ESL zariadenia.");
-  byId("safety-banner").classList.toggle("live", live);
-}
-
-async function loadOverview() {
-  setState("overview-state", "Načítavam prehľad…");
-  byId("kpi-grid").replaceChildren();
-  try {
-    const [health, dashboard, alertsResult, jobsResult, tagsResult] = await Promise.all([
-      api("/api/health"), api("/api/dashboard"), api("/api/alerts?active=true"), api("/api/jobs"), api("/api/tags"),
-    ]);
-    setOperatingMode(health);
-    const lowBattery = tagsResult.items.filter((tag) => Number(tag.battery) <= 20).length;
-    const metrics = [
-      ["Cenovky", dashboard.tags, `${dashboard.bound_tags} priradených`],
-      ["Online / bez chyby", dashboard.tags - dashboard.failed_tags, `${dashboard.failed_tags} s chybou`],
-      ["Nízka batéria", lowBattery, "20 % alebo menej"],
-      ["Produkty", dashboard.products, "v lokálnom katalógu"],
-      ["Otvorené alerty", dashboard.active_alerts, "vyžadujú pozornosť"],
-      ["Čakajúce úlohy", dashboard.queued_jobs, "vo fronte alebo v behu"],
-      ["Stanice", dashboard.routers, `${dashboard.offline_routers} offline`],
-      ["Režim", health.mode === "live" ? "LIVE" : (health.mode === "read_only" ? "READ" : "SIM"), health.mode === "live" ? "zápis vyžaduje potvrdenie" : "bez fyzických zápisov"],
-    ];
-    byId("kpi-grid").replaceChildren(...metrics.map(([label, value, meta]) => element("article", { className: "kpi" }, [
-      element("span", { className: "kpi-label", text: label }), element("strong", { className: "kpi-value", text: value }), element("span", { className: "kpi-meta", text: meta }),
-    ])));
-    renderOverviewRows("overview-alerts", alertsResult.items.filter((item) => item.severity === "critical" || item.severity === "warning").slice(0, 5), "Bez aktívnych kritických alertov.", (item) => [item.message, `${statusLabels[item.severity] || item.severity} · ${item.entity_id}`]);
-    renderOverviewRows("overview-jobs", jobsResult.items.slice(0, 5), "Zatiaľ neboli vytvorené žiadne úlohy.", (item) => [item.id, `${statusLabels[item.status] || item.status} · ${item.succeeded_items}/${item.total_items} úspešných`]);
-    setState("overview-state", "");
-    setConnection(true);
-  } catch (error) {
-    setState("overview-state", `Prehľad sa nepodarilo načítať: ${error.message}`, true);
-    setConnection(false);
-  }
-}
-
-function renderOverviewRows(id, items, emptyText, describe) {
-  const target = byId(id);
-  if (!items.length) { target.replaceChildren(emptyMessage(emptyText)); return; }
-  target.replaceChildren(...items.map((item) => {
-    const [title, detail] = describe(item);
-    return element("div", { className: "list-row" }, [element("div", {}, [element("strong", { text: title }), element("p", { text: detail })]), status(item.status || item.severity)]);
-  }));
-}
-
-async function loadTags() {
-  setState("tags-state", "Načítavam cenovky…");
-  try {
-    const params = new URLSearchParams();
-    const searchTerm = byId("tag-search").value.trim().toLowerCase();
-    const selectedStatus = byId("tag-status").value;
-    const router = byId("tag-router").value;
-    if (selectedStatus) params.set("status", selectedStatus);
-    if (router) params.set("router_id", router);
-    const query = params.toString();
-    const [tagsResult, productsResult, routersResult] = await Promise.all([
-      api(`/api/tags${query ? `?${query}` : ""}`), api("/api/products"), api("/api/routers"),
-    ]);
-    state.products = productsResult.items;
-    state.routers = routersResult.items;
-    let items = tagsResult.items;
-    if (searchTerm) {
-      const productMatches = new Set(state.products.filter((product) => [product.name, product.sku, product.ean].some((value) => String(value || "").toLowerCase().includes(searchTerm))).map((product) => product.id));
-      items = items.filter((tag) => [tag.mac, tag.label].some((value) => String(value || "").toLowerCase().includes(searchTerm)) || productMatches.has(tag.product_id));
-    }
-    const battery = byId("tag-battery").value;
-    if (battery === "low") items = items.filter((tag) => Number(tag.battery) <= 20);
-    if (battery === "ok") items = items.filter((tag) => Number(tag.battery) > 20);
-    const signal = byId("tag-signal").value;
-    if (signal === "strong") items = items.filter((tag) => Number(tag.rssi) >= -65);
-    if (signal === "medium") items = items.filter((tag) => Number(tag.rssi) >= -80 && Number(tag.rssi) < -65);
-    if (signal === "weak") items = items.filter((tag) => Number(tag.rssi) < -80);
-    state.tags = items;
-    populateRouterFilter();
-    renderTags(items);
-    setState("tags-state", items.length ? "" : "Nenašli sa žiadne cenovky.");
-  } catch (error) {
-    setState("tags-state", `Cenovky sa nepodarilo načítať: ${error.message}`, true);
-    byId("tags-table").replaceChildren();
-  }
-}
-
-function populateRouterFilter() {
-  const select = byId("tag-router");
-  const current = select.value;
-  const first = element("option", { value: "", text: "Všetky" });
-  select.replaceChildren(first, ...state.routers.map((router) => element("option", { value: router.id, text: `${router.name} (${router.address})` })));
-  if ([...select.options].some((option) => option.value === current)) select.value = current;
-}
-
-function renderTags(items) {
-  const productNames = new Map(state.products.map((product) => [product.id, product.name]));
-  const rows = items.map((tag) => {
-    const checkbox = element("input", { type: "checkbox", checked: state.selectedTags.has(tag.id), value: tag.id, attrs: { "aria-label": `Vybrať cenovku ${tag.mac}` }, dataset: { tagSelect: tag.id } });
-    const batteryValue = Math.max(0, Math.min(100, Number(tag.battery) || 0));
-    const meter = element("span", { className: `battery${batteryValue <= 20 ? " low" : ""}`, attrs: { "aria-hidden": "true" } }, [element("span")]);
-    meter.firstChild.style.width = `${batteryValue}%`;
-    const batteryCell = element("span", {}, [meter, document.createTextNode(`${batteryValue} %`)]);
-    const row = element("tr");
-    row.append(makeCell(checkbox, "checkbox-cell"), makeCell(tag.mac, "mono"), makeCell(tag.label), makeCell(status(tag.status)), makeCell(batteryCell), makeCell(`${tag.rssi} dBm`), makeCell(tag.router_id), makeCell(tag.product_id ? productNames.get(tag.product_id) || tag.product_id : "Nepriradená"));
-    return row;
-  });
-  renderTable("tags-table", ["", "MAC", "Označenie", "Stav", "Batéria", "Signál", "Stanica", "Produkt"], rows);
-  updateSelection();
-}
-
-function updateSelection() {
-  byId("selected-count").textContent = `Vybrané: ${state.selectedTags.size}`;
-  byId("create-job-button").disabled = state.selectedTags.size === 0;
-}
-
-async function createBulkJob() {
-  const selected = state.tags.filter((tag) => state.selectedTags.has(tag.id));
-  const productIds = [...new Set(selected.map((tag) => tag.product_id).filter(Boolean))];
-  if (!productIds.length) { notify("Vybrané cenovky nemajú priradený produkt.", true); return; }
-  if (selected.some((tag) => !tag.product_id)) notify("Nepriradené cenovky boli z výberu vynechané.", true);
-  const button = byId("create-job-button");
-  button.disabled = true;
-  button.textContent = "Vytváram…";
-  try {
-    const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({ product_ids: productIds }) });
-    state.selectedTags.clear();
-    updateSelection();
-    notify(`Úloha ${job.id} bola vytvorená v simulačnom režime.`);
-    location.hash = "jobs";
-  } catch (error) { notify(`Úlohu sa nepodarilo vytvoriť: ${error.message}`, true); }
-  finally { button.textContent = "Vytvoriť update job"; button.disabled = state.selectedTags.size === 0; }
-}
-
-async function loadProducts() {
-  setState("products-state", "Načítavam produkty…");
-  try {
-    const params = new URLSearchParams();
-    const searchTerm = byId("product-search").value.trim();
-    if (searchTerm) params.set("search", searchTerm);
-    const query = params.toString();
-    const [productsResult, templatesResult] = await Promise.all([api(`/api/products${query ? `?${query}` : ""}`), api("/api/templates")]);
-    state.products = productsResult.items;
-    state.templates = templatesResult.items;
-    populateTemplateSelect();
-    renderProducts();
-    setState("products-state", state.products.length ? "" : "Nenašli sa žiadne produkty.");
-  } catch (error) {
-    setState("products-state", `Produkty sa nepodarilo načítať: ${error.message}`, true);
-    byId("products-table").replaceChildren();
-  }
-}
-
-function renderProducts() {
-  const rows = state.products.map((product) => {
-    const actions = element("div", { className: "table-actions" }, [
-      actionButton("Upraviť", "edit-product", product.id),
-      actionButton(product.tag_id ? "Odpojiť cenovku" : "Priradiť cenovku", product.tag_id ? "unbind" : "bind", product.id),
-      actionButton("Vymazať produkt", "delete-product", product.id, "danger"),
-    ]);
-    const row = element("tr");
-    row.append(makeCell(product.sku, "mono"), makeCell(product.ean), makeCell(product.name), makeCell(formatPrice(product.price, product.currency)), makeCell(product.currency || "EUR"), makeCell(formatDate(product.updated_at)), makeCell(product.tag_id || "Nepriradená", product.tag_id ? "mono" : "muted"), makeCell(actions));
-    return row;
-  });
-  renderTable("products-table", ["SKU", "EAN", "Názov", "Cena", "Jednotka", "Aktualizované", "Cenovka", "Akcie"], rows);
-}
-
-function populateTemplateSelect() {
-  const select = byId("product-template");
-  select.replaceChildren(element("option", { value: "", text: "Bez šablóny" }), ...state.templates.map((template) => element("option", { value: template.id, text: `${template.name} (${template.width} × ${template.height})` })));
-}
-
-function openProductModal(product = null) {
-  byId("product-form").reset();
-  byId("product-form-error").hidden = true;
-  byId("product-id").value = product ? product.id : "";
-  byId("product-modal-title").textContent = product ? "Upraviť produkt" : "Pridať produkt";
-  byId("product-sku").value = product ? product.sku : "";
-  byId("product-ean").value = product && product.ean ? product.ean : "";
-  byId("product-name").value = product ? product.name : "";
-  byId("product-price").value = product ? product.price : "";
-  byId("product-template").value = product && product.template_id ? product.template_id : "";
-  byId("product-modal").showModal();
-  byId("product-sku").focus();
-}
-
-async function saveProduct(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  if (!form.reportValidity()) return;
-  const id = byId("product-id").value;
-  const payload = {
-    sku: byId("product-sku").value.trim(), ean: byId("product-ean").value.trim() || null,
-    name: byId("product-name").value.trim(), price: Number(byId("product-price").value),
-    template_id: byId("product-template").value || null,
-  };
-  const save = byId("save-product");
-  save.disabled = true;
-  save.textContent = "Ukladám…";
-  try {
-    if (id) {
-      await api(`/api/products/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) });
-    } else {
-      await api("/api/products", { method: "POST", body: JSON.stringify(payload) });
-    }
-    byId("product-modal").close();
-    notify(id ? "Produkt bol aktualizovaný." : "Produkt bol vytvorený.");
-    await loadProducts();
-  } catch (error) {
-    const errorBox = byId("product-form-error");
-    errorBox.textContent = `Produkt sa nepodarilo uložiť: ${error.message}`;
-    errorBox.hidden = false;
-  } finally { save.disabled = false; save.textContent = "Uložiť produkt"; }
-}
-
-async function deleteProduct(id) {
-  const product = state.products.find((item) => item.id === id);
-  if (!product || !window.confirm(`Vymazať lokálny produkt „${product.name}“? Táto akcia nevymaže fyzickú cenovku.`)) return;
-  try {
-    await api(`/api/products/${encodeURIComponent(id)}`, { method: "DELETE" });
-    notify("Lokálny produkt bol vymazaný.");
-    await loadProducts();
-  } catch (error) { notify(`Produkt sa nepodarilo vymazať: ${error.message}`, true); }
-}
-
-async function openBinding(id) {
-  byId("binding-product-id").value = id;
-  const select = byId("binding-tag");
-  select.replaceChildren(element("option", { value: "", text: "Načítavam…" }));
-  byId("binding-modal").showModal();
-  try {
-    const result = await api("/api/tags?bound=false");
-    select.replaceChildren(element("option", { value: "", text: "Vyberte cenovku" }), ...result.items.map((tag) => element("option", { value: tag.id, text: `${tag.mac} — ${tag.label || tag.id}` })));
-  } catch (error) { byId("binding-modal").close(); notify(`Voľné cenovky sa nepodarilo načítať: ${error.message}`, true); }
-}
-
-async function saveBinding(event) {
-  event.preventDefault();
-  const productId = byId("binding-product-id").value;
-  const tagId = byId("binding-tag").value;
-  if (!tagId) return;
-  try {
-    await api("/api/bindings", { method: "POST", body: JSON.stringify({ product_id: productId, tag_id: tagId }) });
-    byId("binding-modal").close(); notify("Cenovka bola priradená k produktu."); await loadProducts();
-  } catch (error) { notify(`Cenovku sa nepodarilo priradiť: ${error.message}`, true); }
-}
-
-async function unbindProduct(product) {
-  if (!product.tag_id || !window.confirm(`Odpojiť cenovku ${product.tag_id} od produktu „${product.name}“?`)) return;
-  try {
-    await api(`/api/bindings/${encodeURIComponent(product.id)}/${encodeURIComponent(product.tag_id)}`, { method: "DELETE" });
-    notify("Cenovka bola od produktu odpojená."); await loadProducts();
-  } catch (error) { notify(`Väzbu sa nepodarilo odstrániť: ${error.message}`, true); }
-}
-
-async function loadTemplates() {
-  setState("templates-state", "Načítavam šablóny…");
-  try {
-    const [templatesResult, tagsResult] = await Promise.all([api("/api/templates"), api("/api/tags")]);
-    state.templates = templatesResult.items;
-    const counts = new Map();
-    tagsResult.items.forEach((tag) => counts.set(tag.template_id, (counts.get(tag.template_id) || 0) + 1));
-    const cards = state.templates.map((template) => element("article", { className: "card" }, [
-      element("p", { className: "eyebrow", text: template.id }), element("h2", { text: template.name }),
-      definitionList([["Rozmery", `${template.width} × ${template.height} px`], ["Typ", "ESL displej"], ["Mapping typ", template.mapping_type], ["Dynamické polia", "Produkt, cena, EAN"], ["Priradené cenovky", counts.get(template.id) || 0]]),
-    ]));
-    byId("templates-grid").replaceChildren(...(cards.length ? cards : [emptyMessage("Nie sú dostupné žiadne šablóny.")]));
-    setState("templates-state", "");
-  } catch (error) { setState("templates-state", `Šablóny sa nepodarilo načítať: ${error.message}`, true); byId("templates-grid").replaceChildren(); }
-}
-
 function definitionList(items) {
   const list = element("dl");
   items.forEach(([term, value]) => list.append(element("dt", { text: term }), element("dd", { text: value })));
   return list;
 }
-
-async function loadRouters() {
-  setState("routers-state", "Načítavam stanice…");
-  try {
-    const [routersResult, tagsResult] = await Promise.all([api("/api/routers"), api("/api/tags")]);
-    state.routers = routersResult.items;
-    const cards = state.routers.map((router) => {
-      const attached = tagsResult.items.filter((tag) => tag.router_id === router.id).length;
-      return element("article", { className: "card" }, [element("p", { className: "eyebrow", text: router.id }), element("h2", { text: router.name }), status(router.status), definitionList([["IP adresa", router.address], ["Heartbeat", formatDate(router.last_seen_at)], ["Frekvencia", "2,4 GHz"], ["Verzia", router.version || router.firmware_version || "Neznáma"], ["Počet cenoviek", attached]])]);
-    });
-    byId("routers-grid").replaceChildren(...(cards.length ? cards : [emptyMessage("Nie sú dostupné žiadne stanice.")]));
-    setState("routers-state", "");
-  } catch (error) { setState("routers-state", `Stanice sa nepodarilo načítať: ${error.message}`, true); byId("routers-grid").replaceChildren(); }
-}
-
-async function loadJobs() {
-  setState("jobs-state", "Načítavam úlohy…");
-  try {
-    const result = await api("/api/jobs");
-    state.jobs = await Promise.all(result.items.map((job) => api(`/api/jobs/${encodeURIComponent(job.id)}`)));
-    byId("jobs-list").replaceChildren(...(state.jobs.length ? state.jobs.map(renderJob) : [emptyMessage("Zatiaľ neboli vytvorené žiadne úlohy.")]));
-    setState("jobs-state", "");
-  } catch (error) { setState("jobs-state", `Úlohy sa nepodarilo načítať: ${error.message}`, true); byId("jobs-list").replaceChildren(); }
-}
-
-function renderJob(job) {
-  const successRate = job.total_items ? Math.round((Number(job.succeeded_items) / Number(job.total_items)) * 100) : 0;
-  const progressFill = element("span");
-  progressFill.style.width = `${successRate}%`;
-  const actions = element("div", { className: "job-actions" });
-  if (["queued", "partial", "failed"].includes(job.status) && job.items.some((item) => item.status === "queued")) {
-    actions.append(actionButton("Simulovať úspech", "simulate", job.id), actionButton("Simulovať chybu", "simulate-failure", job.id));
+async function api(path, options = {}) {
+  const { authReturnTarget = null, ...requestOptions } = options;
+  const config = { credentials: "same-origin", ...requestOptions, headers: { Accept: "application/json", ...(requestOptions.headers || {}) } };
+  if (config.body !== undefined) config.headers["Content-Type"] = "application/json";
+  const response = await fetch(path, config);
+  const type = response.headers.get("content-type") || "";
+  const payload = response.status === 204 ? null : (type.includes("application/json") ? await response.json() : await response.text());
+  if (!response.ok) {
+    const error = new Error(payload && payload.error ? payload.error.message : `Požiadavka zlyhala (${response.status})`);
+    error.status = response.status;
+    if (response.status === 401 && path !== "/api/session") openAuthModal(authReturnTarget);
+    throw error;
   }
-  if (Number(job.failed_items) > 0) actions.append(actionButton("Opakovať chybné", "retry", job.id));
-  const itemRows = job.items.map((item) => {
-    const row = element("tr");
-    row.append(makeCell(item.tag_id, "mono"), makeCell(item.product_id, "mono"), makeCell(status(item.status)), makeCell(item.attempts), makeCell(item.error));
-    return row;
+  return payload;
+}
+function notify(message, isError = false) {
+  const toast = element("div", { className: `toast${isError ? " error" : ""}`, text: message });
+  byId("toast-region").replaceChildren(toast);
+  window.setTimeout(() => { if (toast.isConnected) toast.remove(); }, 5000);
+}
+function selectedController() { return byId("controller-select").value; }
+function controllerName(id) { return state.controllers.find((item) => item.id === id)?.name || id || "Neznámy"; }
+function scoped(items, controller = selectedController()) { return items.filter((item) => item.controller_id === controller); }
+
+function rememberAndOpen(dialog, focusTarget, openerOverride = null) {
+  if (!dialog.open) {
+    const opener = openerOverride || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    focusManager.remember(dialog, opener);
+    dialog.showModal();
+  }
+  if (focusTarget) focusTarget.focus();
+}
+function closeDialog(dialog, reset = true) {
+  if (!dialogOperationGuard.canClose(dialog)) return false;
+  dialogOperationGuard.invalidate(dialog);
+  if (dialog.id === "tag-drawer") detailGuard.invalidate();
+  if (reset) dialog.querySelector("form")?.reset();
+  if (dialog.open) dialog.close();
+  focusManager.restore(dialog);
+  return true;
+}
+function clearSessionToken() { byId("auth-token").value = ""; }
+function openAuthModal(authReturnTarget = null) {
+  const dialog = byId("auth-modal");
+  if (dialogOperationGuard.isBusy(dialog)) return false;
+  if (!dialog.open) dialogOperationGuard.open(dialog);
+  clearSessionToken();
+  byId("auth-form-error").hidden = true;
+  rememberAndOpen(dialog, byId("auth-token"), authReturnTarget);
+  return true;
+}
+function closeAuthModal() {
+  if (!closeDialog(byId("auth-modal"))) return false;
+  clearSessionToken();
+  byId("auth-form-error").hidden = true;
+  return true;
+}
+async function authenticate(event) {
+  event.preventDefault();
+  if (!event.currentTarget.reportValidity()) return;
+  const dialog = byId("auth-modal");
+  const operation = dialogOperationGuard.begin(dialog);
+  if (!operation) return;
+  const button = byId("auth-submit");
+  button.disabled = true; button.textContent = "Prihlasujem…";
+  try {
+    await api("/api/session", { method: "POST", body: JSON.stringify({ token: byId("auth-token").value }) });
+    if (!dialogOperationGuard.finish(operation)) return;
+    button.disabled = false; button.textContent = "Prihlásiť";
+    clearSessionToken();
+    closeAuthModal();
+    notify("Prihlásenie bolo úspešné. Zopakujte chránenú operáciu.");
+  } catch (error) {
+    if (!dialogOperationGuard.finish(operation)) return;
+    button.disabled = false; button.textContent = "Prihlásiť";
+    clearSessionToken();
+    setMessage("auth-form-error", `Prihlásenie zlyhalo: ${error.message}`, true);
+    byId("auth-form-error").hidden = false;
+  }
+}
+
+function renderControllerSelect() {
+  const select = byId("controller-select");
+  const previous = select.value;
+  select.replaceChildren(...state.controllers.map((controller) => element("option", {
+    value: controller.id, text: `${controller.name}${controller.default ? " — predvolený" : ""}`,
+  })));
+  const preferred = state.controllers.find((item) => item.id === previous) || state.controllers.find((item) => item.default) || state.controllers[0];
+  if (preferred) select.value = preferred.id;
+}
+function formControllerOptions(selectId, selected) {
+  const select = byId(selectId);
+  select.replaceChildren(...state.controllers.map((controller) => element("option", { value: controller.id, text: controller.name })));
+  if (state.controllers.some((item) => item.id === selected)) select.value = selected;
+}
+function modelOptions(selectId, selected, allowUnsupported = false) {
+  const select = byId(selectId);
+  const options = Object.entries(MODELS).map(([id, model]) => element("option", { value: id, text: model.label }));
+  if (allowUnsupported && selected && !MODELS[selected]) options.unshift(element("option", { value: "", text: "Nepodporovaný historický model" }));
+  select.replaceChildren(...options);
+  select.value = MODELS[selected] ? selected : (allowUnsupported ? "" : Object.keys(MODELS)[0]);
+}
+function dependentOptions(prefix, controllerId, modelId, selectedRouter = "", selectedTemplate = "") {
+  const router = byId(`${prefix}-router`);
+  const template = byId(`${prefix}-template`);
+  const dimensions = MODELS[modelId];
+  const routers = state.routers.filter((item) => item.controller_id === controllerId);
+  const templates = state.templates.filter((item) => item.controller_id === controllerId && dimensions && item.width === dimensions.width && item.height === dimensions.height);
+  router.replaceChildren(element("option", { value: "", text: routers.length ? "Vyberte RF router" : "Žiadny RF router" }), ...routers.map((item) => element("option", { value: item.id, text: `${item.name} — ${item.address}` })));
+  template.replaceChildren(element("option", { value: "", text: templates.length ? "Vyberte šablónu" : "Žiadna kompatibilná šablóna" }), ...templates.map((item) => element("option", { value: item.id, text: item.name })));
+  router.value = routers.some((item) => item.id === selectedRouter) ? selectedRouter : "";
+  template.value = templates.some((item) => item.id === selectedTemplate) ? selectedTemplate : "";
+}
+
+function renderTags() {
+  const query = byId("tag-search").value.trim().toLowerCase();
+  const wantedStatus = byId("tag-status").value;
+  const items = scoped(state.tags).filter((tag) => {
+    const matchesText = !query || [tag.mac, tag.label, tag.id].some((value) => String(value || "").toLowerCase().includes(query));
+    return matchesText && (!wantedStatus || tag.status === wantedStatus);
   });
-  const itemTable = element("div", { className: "table-wrap" });
-  if (itemRows.length) {
-    const table = element("table"); const header = element("tr");
-    ["Cenovka", "Produkt", "Stav", "Pokusy", "Chyba"].forEach((label) => header.append(element("th", { text: label, attrs: { scope: "col" } })));
-    table.append(element("thead", {}, [header]), element("tbody", {}, itemRows)); itemTable.append(table);
+  if (!items.length) {
+    byId("tags-list").replaceChildren(empty("Pre tento controller a filter nie sú dostupné žiadne cenovky."));
+    setMessage("tags-state", "Prázdny výsledok je aktuálny stav inventára.");
+    return;
   }
-  return element("article", { className: "job" }, [
-    element("div", { className: "job-header" }, [element("div", {}, [element("p", { className: "eyebrow", text: formatDate(job.requested_at) }), element("h2", { className: "mono", text: job.id }), status(job.status)]), actions]),
-    element("div", { className: "job-summary" }, [["Položky", job.total_items], ["Úspešné", job.succeeded_items], ["Chybné", job.failed_items], ["Úspešnosť", `${successRate} %`]].map(([label, value]) => element("div", { className: "job-metric" }, [element("span", { text: label }), element("strong", { text: value })]))),
-    element("div", { className: "progress", attrs: { role: "progressbar", "aria-label": `Úspešnosť úlohy ${job.id}`, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(successRate) } }, [progressFill]),
-    element("div", { className: "job-items" }, [itemTable]),
-  ]);
+  const header = element("div", { className: "inventory-header", attrs: { "aria-hidden": "true" } }, ["Cenovka", "Model", "RF router", "Telemetria", "Zdroj", ""].map((text) => element("span", { text })));
+  const rows = items.map((tag) => {
+    const supported = Boolean(tag.management_supported);
+    const model = supported && tag.device_model ? `${tag.device_model.width} × ${tag.device_model.height} ${tag.device_model.screen_type === 1 ? "TFT" : "EPD"}` : `${tag.width} × ${tag.height} — nepodporované`;
+    const source = tag.staged ? "lokálny staging" : "vendor inventár";
+    const support = supported ? "podporovaná správa" : "nepodporovaná historická cenovka";
+    const accessibleName = `Otvoriť detail cenovky ${tag.label || tag.id}, MAC ${tag.mac}, model ${model}, ${support}, RF router ${tag.rf_router?.name || "Bez routera"}, batéria ${tag.battery} %, signál ${tag.rssi} dBm, zdroj ${source}`;
+    return element("button", { type: "button", className: "tag-row", dataset: { tagId: tag.id }, attrs: { "aria-label": accessibleName } }, [
+      element("span", { className: "tag-primary" }, [element("strong", { className: "mono", text: tag.mac }), element("span", { text: tag.label || tag.id })]),
+      element("span", { className: "cell-label", text: model, attrs: { "data-label": "Model" } }),
+      element("span", { className: "cell-label", text: tag.rf_router?.name || "Bez routera", attrs: { "data-label": "RF router" } }),
+      element("span", { className: "cell-label", text: `${tag.battery} % · ${tag.rssi} dBm`, attrs: { "data-label": "Telemetria" } }),
+      element("span", {}, [statusNode(supported ? tag.status : "unsupported", supported), element("span", { className: "cell-label", text: tag.staged ? " · lokálne pripravená" : " · vendor inventár" })]),
+      element("span", { className: "tag-mobile-meta", text: `${model} · ${tag.rf_router?.name || "Bez routera"} · ${tag.battery} %` }),
+      element("span", { className: "row-arrow", text: "›", attrs: { "aria-hidden": "true" } }),
+    ]);
+  });
+  byId("tags-list").replaceChildren(header, ...rows);
+  setMessage("tags-state", "");
 }
-
-async function processJob(id, withFailure) {
-  const job = state.jobs.find((item) => item.id === id);
-  const queued = job ? job.items.filter((item) => item.status === "queued") : [];
-  const failIds = withFailure && queued.length ? [queued[0].tag_id] : [];
+async function openTagDetail(id) {
+  dialogOperationGuard.open(byId("tag-drawer"));
+  const request = detailGuard.begin(id);
+  setMessage("tag-detail-state", ""); byId("tag-detail-state").hidden = true;
+  byId("detail-id").value = "";
+  [...byId("tag-detail-form").elements].forEach((control) => { if (!control.classList.contains("dialog-close")) control.disabled = true; });
+  rememberAndOpen(byId("tag-drawer"), byId("tag-drawer-title"));
   try {
-    await api(`/api/jobs/${encodeURIComponent(id)}/simulate`, { method: "POST", body: JSON.stringify({ fail_tag_ids: failIds }) });
-    notify(withFailure ? "Simulácia skončila s označenou chybnou položkou." : "Simulácia bola úspešne dokončená."); await loadJobs();
-  } catch (error) { notify(`Simuláciu sa nepodarilo spustiť: ${error.message}`, true); }
+    const tag = await api(`/api/tags/${encodeURIComponent(id)}`, { signal: request.signal });
+    if (!detailGuard.accept(request)) return;
+    byId("tag-drawer-title").textContent = tag.label || tag.mac;
+    byId("detail-id").value = tag.id;
+    formControllerOptions("detail-controller", tag.controller_id);
+    modelOptions("detail-model", tag.device_model_id, true);
+    dependentOptions("detail", tag.controller_id, tag.device_model_id, tag.router_id, tag.template_id);
+    byId("detail-mac").value = tag.mac || "";
+    byId("detail-label").value = tag.label || "";
+    byId("tag-test-data").value = JSON.stringify(tag.test_data || {}, null, 2);
+    byId("tag-telemetry").replaceChildren(...definitionList([
+      ["Controller", tag.controller?.name || controllerName(tag.controller_id)],
+      ["RF router", tag.rf_router ? `${tag.rf_router.name} · ${tag.rf_router.address}` : "Nepriradený"],
+      ["Model", tag.device_model ? MODELS[tag.device_model.id]?.label || tag.device_model.name : `${tag.width} × ${tag.height}`],
+      ["Šablóna", tag.compatible_template?.name || (tag.template_id ? "Nekompatibilná" : "Nepriradená")],
+      ["Zdroj inventára", tag.staged ? "Lokálny staging" : "Vendor read-only"],
+      ["Zdroj konfigurácie", tag.configuration_source || "Neznámy"],
+      ["Batéria", `${tag.battery} %`], ["Signál", `${tag.rssi} dBm`],
+      ["Posledný kontakt", safeDate(tag.last_seen_at)], ["Stav", statusLabels[tag.status] || tag.status],
+    ]).children);
+    const supported = Boolean(tag.management_supported);
+    byId("tag-support-state").textContent = supported ? "Úprava mení iba lokálnu konfiguráciu; fyzický dispatch sa nevykoná." : "Nepodporovaná historická cenovka. Záznam zostáva viditeľný, ale konfiguráciu nemožno upraviť.";
+    [...byId("tag-detail-form").elements].forEach((control) => {
+      if (["BUTTON", "INPUT", "SELECT", "TEXTAREA"].includes(control.tagName) && control.id !== "detail-controller") control.disabled = !supported;
+    });
+    document.querySelectorAll("#tag-detail-form .dialog-close").forEach((button) => { button.disabled = false; });
+  } catch (error) {
+    const currentFailure = detailGuard.current === request;
+    detailGuard.fail(request);
+    if (currentFailure && error.name !== "AbortError") {
+      setMessage("tag-detail-state", `Detail sa nepodarilo načítať: ${error.message}`, true); byId("tag-detail-state").hidden = false;
+    }
+  }
 }
-
-async function retryJob(id) {
+function parseObject(id) {
+  let value;
+  try { value = JSON.parse(byId(id).value); } catch (_error) { throw new Error("Testovacie dáta musia byť platný JSON objekt."); }
+  if (!value || Array.isArray(value) || typeof value !== "object") throw new Error("Testovacie dáta musia byť JSON objekt.");
+  return value;
+}
+function tagPayload(prefix, testId) {
+  const modelId = byId(`${prefix}-model`).value;
+  const model = MODELS[modelId];
+  if (!model) throw new Error("Vyberte jeden z troch podporovaných modelov.");
+  return {
+    controller_id: byId(`${prefix}-controller`).value,
+    router_id: byId(`${prefix}-router`).value,
+    device_model_id: modelId,
+    width: model.width, height: model.height,
+    template_id: byId(`${prefix}-template`).value,
+    mac: byId(`${prefix}-mac`).value.trim(), label: byId(`${prefix}-label`).value.trim() || null,
+    test_data: parseObject(testId),
+  };
+}
+async function saveTagDetail(event) {
+  event.preventDefault(); if (!event.currentTarget.reportValidity()) return;
+  if (!detailGuard.activeId || detailGuard.activeId !== byId("detail-id").value) {
+    setMessage("tag-detail-state", "Detail už nie je aktívny. Otvorte cenovku znova.", true); byId("tag-detail-state").hidden = false; return;
+  }
+  const dialog = byId("tag-drawer");
+  const operation = dialogOperationGuard.begin(dialog);
+  if (!operation) return;
+  const button = byId("save-tag-detail"); button.disabled = true; button.textContent = "Ukladám…";
   try {
-    await api(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: "POST", body: JSON.stringify({}) });
-    notify("Chybné položky sú opäť vo fronte."); await loadJobs();
-  } catch (error) { notify(`Opakovanie sa nepodarilo: ${error.message}`, true); }
+    const id = byId("detail-id").value;
+    await api(`/api/tags/${encodeURIComponent(id)}/configuration`, { method: "PUT", body: JSON.stringify(tagPayload("detail", "tag-test-data")), authReturnTarget: button });
+    if (!dialogOperationGuard.isCurrent(operation)) return;
+    dialogOperationGuard.finish(operation);
+    button.disabled = false; button.textContent = "Uložiť lokálnu konfiguráciu";
+    closeDialog(dialog); notify("Lokálna konfigurácia cenovky bola uložená. Bez fyzického odoslania."); await loadInventory();
+  } catch (error) {
+    if (!dialogOperationGuard.isCurrent(operation)) return;
+    dialogOperationGuard.finish(operation);
+    button.disabled = false; button.textContent = "Uložiť lokálnu konfiguráciu";
+    setMessage("tag-detail-state", `Konfiguráciu sa nepodarilo uložiť: ${error.message}`, true); byId("tag-detail-state").hidden = false;
+  }
+}
+function openNewTag() {
+  dialogOperationGuard.open(byId("tag-modal"));
+  byId("tag-form").reset(); byId("new-test-data").value = "{}"; byId("tag-form-error").hidden = true;
+  formControllerOptions("new-controller", selectedController()); modelOptions("new-model", "2.9EPD-BWR");
+  dependentOptions("new", byId("new-controller").value, byId("new-model").value);
+  rememberAndOpen(byId("tag-modal"), byId("new-controller"));
+}
+async function createTag(event) {
+  event.preventDefault(); if (!event.currentTarget.reportValidity()) return;
+  const dialog = byId("tag-modal");
+  const operation = dialogOperationGuard.begin(dialog);
+  if (!operation) return;
+  const button = byId("save-new-tag"); button.disabled = true; button.textContent = "Pripravujem…";
+  try {
+    await api("/api/tags/staged", { method: "POST", body: JSON.stringify(tagPayload("new", "new-test-data")), authReturnTarget: button });
+    if (!dialogOperationGuard.isCurrent(operation)) return;
+    dialogOperationGuard.finish(operation);
+    button.disabled = false; button.textContent = "Pripraviť lokálne";
+    closeDialog(dialog); notify("Cenovka bola pripravená lokálne. Nebol vykonaný fyzický dispatch."); await loadInventory();
+  } catch (error) {
+    if (!dialogOperationGuard.isCurrent(operation)) return;
+    dialogOperationGuard.finish(operation);
+    button.disabled = false; button.textContent = "Pripraviť lokálne";
+    setMessage("tag-form-error", `Cenovku sa nepodarilo pripraviť: ${error.message}`, true); byId("tag-form-error").hidden = false;
+  }
 }
 
+function templateFamily(template) {
+  const key = `${template.width}x${template.height}`;
+  return Object.values(MODELS).find((model) => `${model.width}x${model.height}` === key)?.label || null;
+}
+function renderTemplates() {
+  const items = scoped(state.templates).filter((item) => SUPPORTED_DIMENSIONS.has(`${item.width}x${item.height}`));
+  const cards = items.map((template) => {
+    const preview = element("div", { className: "template-preview" });
+    renderTemplatePreview(preview, template, templateFamily(template), element);
+    const numericVendorId = Number(template.vendor_id);
+    const clone = element("button", { type: "button", className: "button button-primary", text: "Klonovať šablónu", dataset: { cloneId: template.id }, disabled: !Number.isInteger(numericVendorId) || numericVendorId <= 0 });
+    if (clone.disabled) clone.title = "Klonovanie vyžaduje synchronizované číselné serverové ID.";
+    return element("article", { className: "card" }, [preview, element("p", { className: "eyebrow", text: controllerName(template.controller_id) }), element("h2", { text: template.name }), definitionList([["Rodina", templateFamily(template)], ["Rozmery", `${template.width} × ${template.height} px`], ["Server ID", template.vendor_id || template.id], ["Controller", controllerName(template.controller_id)]]), clone]);
+  });
+  byId("templates-grid").replaceChildren(...(cards.length ? cards : [empty("Pre vybraný controller nie sú dostupné šablóny v troch podporovaných rodinách.")]));
+  setMessage("templates-state", cards.length ? "" : "Nepodporované rozmery sú zámerne skryté; inventár sa nemení.");
+}
+function populateCloneSources(controllerId, selectedId = "") {
+  const options = state.templates.filter((item) => item.controller_id === controllerId && SUPPORTED_DIMENSIONS.has(`${item.width}x${item.height}`) && Number.isInteger(Number(item.vendor_id)) && Number(item.vendor_id) > 0);
+  byId("clone-source-template").replaceChildren(element("option", { value: "", text: options.length ? "Vyberte zdroj" : "Žiadna klonovateľná šablóna" }), ...options.map((item) => element("option", { value: String(item.vendor_id), text: `${item.name} · ${templateFamily(item)}` })));
+  if (options.some((item) => item.id === selectedId)) byId("clone-source-template").value = String(options.find((item) => item.id === selectedId).vendor_id);
+}
+function openClone(template) {
+  dialogOperationGuard.open(byId("clone-modal"));
+  byId("clone-form").reset(); byId("clone-error").hidden = true; byId("clone-result").hidden = true; byId("clone-result").textContent = "";
+  formControllerOptions("clone-source-controller", template.controller_id); formControllerOptions("clone-target-controller", selectedController());
+  populateCloneSources(template.controller_id, template.id); updateCloneButton();
+  rememberAndOpen(byId("clone-modal"), byId("clone-target-controller"));
+}
+function updateCloneButton() {
+  byId("clone-submit").disabled = cloneBusy || !byId("clone-confirm").checked || !byId("clone-source-template").value || !byId("clone-target-name").value.trim();
+}
+async function cloneTemplate(event) {
+  event.preventDefault(); if (!event.currentTarget.reportValidity() || !byId("clone-confirm").checked) return;
+  if (cloneBusy) return;
+  const dialog = byId("clone-modal");
+  const operation = dialogOperationGuard.begin(dialog);
+  if (!operation) return;
+  const button = byId("clone-submit");
+  const payload = {
+    source_controller_id: byId("clone-source-controller").value,
+    source_template_id: Number(byId("clone-source-template").value),
+    target_controller_id: byId("clone-target-controller").value,
+    target_name: byId("clone-target-name").value.trim(),
+  };
+  await cloneGuard.run(async () => {
+    try {
+      const result = await api("/api/vendor/templates/clone", { method: "POST", body: JSON.stringify(payload), authReturnTarget: button });
+      if (!dialogOperationGuard.isCurrent(operation)) return;
+      let readback = "Serverový read-back je overený hashmi odpovede.";
+      try {
+        const checked = await api(`/api/vendor/templates/${encodeURIComponent(result.id)}?controller_id=${encodeURIComponent(payload.target_controller_id)}`, { authReturnTarget: button });
+        readback = `Read-back: ${checked.name || result.name} (${checked.width || "?"} × ${checked.height || "?"} px)`;
+      } catch (_error) {
+        readback = `Read-back API po úspechu nebolo dostupné; server v clone odpovedi overil layout ${result.layout_sha256 || "bez hashu"}.`;
+      }
+      byId("clone-result").textContent = `Server ID: ${result.id}\n${readback}`;
+      byId("clone-result").hidden = false;
+      byId("clone-confirm").checked = false;
+      notify(`Šablóna bola vytvorená so server ID ${result.id}.`);
+    } catch (error) {
+      if (!dialogOperationGuard.isCurrent(operation)) return;
+      setMessage("clone-error", `Klonovanie zlyhalo: ${error.message}`, true); byId("clone-error").hidden = false;
+    }
+  }, (busy) => {
+    cloneBusy = busy;
+    if (!busy) dialogOperationGuard.finish(operation);
+    [...byId("clone-form").elements].forEach((control) => { control.disabled = cloneBusy; });
+    byId("clone-submit").textContent = cloneBusy ? "Klonujem a overujem…" : "Klonovať a overiť";
+    if (!cloneBusy) updateCloneButton();
+  });
+}
+
+function renderControllers() {
+  const cards = state.controllers.map((controller) => {
+    const tags = state.tags.filter((item) => item.controller_id === controller.id);
+    const supported = tags.filter((item) => item.management_supported).length;
+    return element("article", { className: "card" }, [element("p", { className: "eyebrow", text: controller.default ? "PREDVOLENÝ CONTROLLER" : "CONTROLLER" }), element("h2", { text: controller.name }), definitionList([["ID", controller.id], ["Base URL", controller.base_url || "Lokálny / nezverejnený"], ["Cenovky", tags.length], ["Podporované", supported], ["Historické nepodporované", tags.length - supported], ["RF routery", state.routers.filter((item) => item.controller_id === controller.id).length], ["Podporované šablóny", state.templates.filter((item) => item.controller_id === controller.id && SUPPORTED_DIMENSIONS.has(`${item.width}x${item.height}`)).length]])]);
+  });
+  byId("controllers-grid").replaceChildren(...(cards.length ? cards : [empty("Nie je nakonfigurovaný žiadny controller.")]));
+  setMessage("controllers-state", cards.length ? "" : "Prázdny zoznam controllerov.");
+}
 async function loadAudit() {
-  setState("audit-state", "Načítavam audit…");
+  setMessage("audit-state", "Načítavam audit…");
   try {
-    const [alertsResult, auditResult] = await Promise.all([api("/api/alerts?active=true"), api("/api/audit?limit=100")]);
-    state.alerts = alertsResult.items; state.audit = auditResult.items;
-    byId("alerts-list").replaceChildren(...(state.alerts.length ? state.alerts.map((item) => element("div", { className: "alert-item" }, [status(item.severity), element("strong", { text: item.message }), element("p", { text: `${item.entity_type} · ${item.entity_id} · ${formatDate(item.created_at)}` })])) : [emptyMessage("Nie sú evidované aktívne alerty.")]));
-    byId("audit-list").replaceChildren(...(state.audit.length ? state.audit.map((item) => element("div", { className: "alert-item" }, [element("strong", { text: item.action }), element("p", { text: `${formatDate(item.created_at)} · ${item.entity_type} · ${item.entity_id}` }), element("div", { className: "audit-details mono", text: JSON.stringify(item.details) })])) : [emptyMessage("Audit zatiaľ neobsahuje udalosti.")]));
-    setState("audit-state", "");
-  } catch (error) { setState("audit-state", `Audit sa nepodarilo načítať: ${error.message}`, true); byId("alerts-list").replaceChildren(); byId("audit-list").replaceChildren(); }
+    const result = await api("/api/audit?limit=100"); state.audit = result.items;
+    const items = state.audit.map((item) => element("article", { className: "audit-item" }, [element("strong", { text: item.action }), element("p", { text: `${safeDate(item.created_at)} · ${item.entity_type} · ${item.entity_id}` }), element("p", { className: "mono", text: JSON.stringify(item.details) })]));
+    byId("audit-list").replaceChildren(...(items.length ? items : [empty("Audit zatiaľ neobsahuje udalosti.")])); setMessage("audit-state", "");
+  } catch (error) { setMessage("audit-state", `Audit sa nepodarilo načítať: ${error.message}`, true); }
 }
-
-async function readOnlySync() {
-  const button = byId("sync-button"); button.disabled = true; button.textContent = "Synchronizujem…";
+function currentRenderer() {
+  if (!state.inventoryLoaded) return;
+  if (state.activeView === "tags") renderTags();
+  if (state.activeView === "templates") renderTemplates();
+  if (state.activeView === "controllers") renderControllers();
+  if (state.activeView === "audit") loadAudit();
+}
+async function loadInventory() {
   try {
-    const result = await api("/api/sync/read-only", { method: "POST", body: JSON.stringify({}) });
-    const synced = result.synced || {};
-    notify(`Synchronizácia iba na čítanie dokončená: ${synced.routers || 0} staníc, ${synced.tags || 0} cenoviek.`);
-    await viewLoaders[state.activeView]();
-  } catch (error) { notify(`Read-only synchronizácia nie je dostupná: ${error.message}`, true); }
-  finally { button.disabled = false; button.textContent = "Synchronizovať iba na čítanie"; }
+    const [controllers, tags, templates, routers, health] = await Promise.all([
+      api("/api/controllers"), api("/api/tags?include_unsupported=true"), api("/api/templates"), api("/api/routers"), api("/api/health"),
+    ]);
+    state.controllers = controllers.items; state.tags = tags.items; state.templates = templates.items; state.routers = routers.items;
+    state.inventoryLoaded = true;
+    renderControllerSelect();
+    const live = health.mode === "live";
+    byId("mode-label").textContent = live ? "LIVE" : (health.mode === "read_only" ? "Read-only" : "Lokálny staging");
+    byId("mode-title").textContent = live ? "LIVE režim" : "Bezpečná lokálna správa";
+    byId("mode-description").textContent = live ? " Fyzické zápisy sú povolené na serveri, ale táto obrazovka konfigurácie ich neodosiela." : " Konfigurácie cenoviek sa ukladajú lokálne bez fyzického odoslania.";
+    byId("safety-banner").classList.toggle("live", live);
+    byId("app-status").textContent = "API pripojené"; document.querySelector(".status-dot").classList.remove("error");
+    currentRenderer();
+  } catch (error) {
+    byId("app-status").textContent = "API nedostupné"; document.querySelector(".status-dot").classList.add("error");
+    const message = `Inventár sa nepodarilo načítať: ${error.message}`;
+    setMessage("tags-state", message, true);
+    setMessage("templates-state", message, true);
+    setMessage("controllers-state", message, true);
+  }
 }
-
 function navigate() {
-  const requested = location.hash.replace(/^#/, "") || "overview";
-  const view = viewLoaders[requested] ? requested : "overview";
+  const requested = location.hash.replace(/^#/, "") || "tags";
+  const view = ["tags", "templates", "controllers", "audit"].includes(requested) ? requested : "tags";
   state.activeView = view;
   document.querySelectorAll("[data-view-panel]").forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== view; });
-  document.querySelectorAll("[data-view]").forEach((link) => {
-    if (link.dataset.view === view) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
-  });
-  byId("primary-nav").classList.remove("open");
-  byId("mobile-nav-toggle").setAttribute("aria-expanded", "false");
-  viewLoaders[view]();
-  window.scrollTo({ top: 0, behavior: "auto" });
+  document.querySelectorAll("[data-view]").forEach((link) => { if (link.dataset.view === view) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); });
+  byId("primary-nav").classList.remove("open"); byId("mobile-nav-toggle").setAttribute("aria-expanded", "false");
+  currentRenderer(); window.scrollTo({ top: 0, behavior: "auto" });
 }
-
 function bindEvents() {
   window.addEventListener("hashchange", navigate);
-  byId("mobile-nav-toggle").addEventListener("click", () => {
-    const open = byId("primary-nav").classList.toggle("open");
-    byId("mobile-nav-toggle").setAttribute("aria-expanded", String(open));
+  byId("mobile-nav-toggle").addEventListener("click", () => { const open = byId("primary-nav").classList.toggle("open"); byId("mobile-nav-toggle").setAttribute("aria-expanded", String(open)); });
+  byId("controller-select").addEventListener("change", currentRenderer);
+  byId("tag-filters").addEventListener("submit", (event) => { event.preventDefault(); renderTags(); });
+  byId("tags-list").addEventListener("click", (event) => { const target = event.target.closest("[data-tag-id]"); if (target) openTagDetail(target.dataset.tagId); });
+  byId("add-tag").addEventListener("click", openNewTag);
+  byId("tag-form").addEventListener("submit", createTag); byId("tag-detail-form").addEventListener("submit", saveTagDetail);
+  ["new", "detail"].forEach((prefix) => {
+    byId(`${prefix}-controller`).addEventListener("change", () => dependentOptions(prefix, byId(`${prefix}-controller`).value, byId(`${prefix}-model`).value));
+    byId(`${prefix}-model`).addEventListener("change", () => dependentOptions(prefix, byId(`${prefix}-controller`).value, byId(`${prefix}-model`).value));
   });
-  byId("sync-button").addEventListener("click", readOnlySync);
-  byId("auth-button").addEventListener("click", openAuthModal);
-  byId("auth-form").addEventListener("submit", authenticateForWrites);
+  byId("templates-grid").addEventListener("click", (event) => { const target = event.target.closest("[data-clone-id]"); const template = target && state.templates.find((item) => item.id === target.dataset.cloneId); if (template) openClone(template); });
+  byId("clone-source-controller").addEventListener("change", () => { populateCloneSources(byId("clone-source-controller").value); updateCloneButton(); });
+  ["clone-source-template", "clone-target-name", "clone-confirm"].forEach((id) => byId(id).addEventListener("input", updateCloneButton));
+  byId("clone-form").addEventListener("submit", cloneTemplate);
+  document.querySelectorAll(".dialog-close").forEach((button) => button.addEventListener("click", () => closeDialog(button.closest("dialog"))));
+  [byId("tag-drawer"), byId("tag-modal"), byId("clone-modal")].forEach((dialog) => {
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialog(dialog); });
+    dialog.addEventListener("click", (event) => { if (event.target === dialog) closeDialog(dialog); });
+  });
+  byId("auth-button").addEventListener("click", (event) => openAuthModal(event.currentTarget)); byId("auth-form").addEventListener("submit", authenticate);
   document.querySelectorAll(".auth-close").forEach((button) => button.addEventListener("click", closeAuthModal));
-  byId("auth-modal").addEventListener("cancel", () => byId("auth-form").reset());
-  document.querySelectorAll(".refresh-view").forEach((button) => button.addEventListener("click", () => viewLoaders[state.activeView]()));
-  byId("tag-filters").addEventListener("submit", (event) => { event.preventDefault(); loadTags(); });
-  byId("tags-table").addEventListener("change", (event) => {
-    const input = event.target.closest("[data-tag-select]"); if (!input) return;
-    if (input.checked) state.selectedTags.add(input.dataset.tagSelect); else state.selectedTags.delete(input.dataset.tagSelect); updateSelection();
-  });
-  byId("clear-selection").addEventListener("click", () => { state.selectedTags.clear(); renderTags(state.tags); });
-  byId("create-job-button").addEventListener("click", createBulkJob);
-  byId("product-search-form").addEventListener("submit", (event) => { event.preventDefault(); loadProducts(); });
-  byId("add-product").addEventListener("click", () => openProductModal());
-  byId("product-form").addEventListener("submit", saveProduct);
-  document.querySelectorAll(".modal-close").forEach((button) => button.addEventListener("click", () => byId("product-modal").close()));
-  document.querySelectorAll(".binding-close").forEach((button) => button.addEventListener("click", () => byId("binding-modal").close()));
-  byId("binding-form").addEventListener("submit", saveBinding);
-  byId("products-table").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-action]"); if (!button) return;
-    const product = state.products.find((item) => item.id === button.dataset.id); if (!product) return;
-    if (button.dataset.action === "edit-product") openProductModal(product);
-    if (button.dataset.action === "delete-product") deleteProduct(product.id);
-    if (button.dataset.action === "bind") openBinding(product.id);
-    if (button.dataset.action === "unbind") unbindProduct(product);
-  });
-  byId("jobs-list").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-action]"); if (!button) return;
-    if (button.dataset.action === "simulate") processJob(button.dataset.id, false);
-    if (button.dataset.action === "simulate-failure") processJob(button.dataset.id, true);
-    if (button.dataset.action === "retry") retryJob(button.dataset.id);
-  });
+  byId("auth-modal").addEventListener("cancel", (event) => { event.preventDefault(); closeAuthModal(); });
   byId("auth-modal").addEventListener("click", (event) => { if (event.target === byId("auth-modal")) closeAuthModal(); });
-  [byId("product-modal"), byId("binding-modal")].forEach((dialog) => dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); }));
 }
 
 bindEvents();
+loadInventory();
 navigate();

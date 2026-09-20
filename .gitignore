@@ -9,3 +9,4 @@ __pycache__/
 webapp/data/
 webapp/*.db
 .coverage
+webapp/test-artifacts/

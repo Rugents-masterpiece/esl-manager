@@ -46,6 +46,171 @@ class ServiceTests(unittest.TestCase):
             with self.subTest(case=case), self.assertRaises(IntegrationError):
                 self.service.sync_read_only(client)
 
+    def test_vendor_sync_matches_decimal_and_dotted_tag_identity_and_infers_model(self):
+        client = Mock()
+        client.get_routers.return_value = [
+            {"id": "1", "ip": "127.0.0.1", "state": True, "description": "Router"}
+        ]
+        client.get_templates.return_value = [
+            {"id": "145", "name": "Supported", "styleLen": "296x128"}
+        ]
+        client.get_style_catalog.return_value = [{
+            "id": 145, "name": "Supported", "descriptor": "Supported",
+            "width": 296, "height": 128, "mappingtype": 2, "type": 2,
+        }]
+        client.get_tags.return_value = [{
+            "mac": "1331705177", "power": 90, "routerMac": "1",
+            "styleName": "Supported", "updateProgress": 1,
+        }]
+        client.get_extended_tags.return_value = [{
+            "mac": "79.96.53.89", "routerid": "1", "styleId": 145,
+            "status": 1, "width": 296, "height": 128, "rssi": -50,
+        }]
+        with self.storage.connection() as connection:
+            connection.execute(
+                "UPDATE tags SET mac = '1331705177' WHERE id = 'tag-001'"
+            )
+
+        self.assertEqual(self.service.sync_read_only(client)["synced"]["tags"], 1)
+        with self.storage.connection() as connection:
+            row = connection.execute(
+                "SELECT id, mac, width, height, device_model_id FROM tags "
+                "WHERE mac = '79.96.53.89'"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["id"], "tag-001")
+        self.assertEqual(tuple(row)[1:], ("79.96.53.89", 296, 128, "2.9EPD-BWR"))
+
+    def test_vendor_sync_rejects_malformed_or_overflow_tag_identities(self):
+        for identity in (
+                "4294967296", "9" * 5000, "-1", "1.2.3", "1.2.3.256",
+                "1.2.3.4.5", "abc", "١"):
+            client = Mock()
+            client.get_routers.return_value = []
+            client.get_templates.return_value = []
+            client.get_style_catalog.return_value = []
+            client.get_tags.return_value = [{
+                "mac": identity, "power": 90, "updateProgress": 1,
+            }]
+            client.get_extended_tags.return_value = [{
+                "mac": identity, "status": 1, "width": 296, "height": 128,
+            }]
+            with self.subTest(identity=identity), self.assertRaises(IntegrationError):
+                self.service.sync_read_only(client)
+        with self.assertRaises(IntegrationError):
+            Service._vendor_tag_identity(10 ** 5000)
+
+    def test_vendor_sync_keeps_48_bit_mac_distinct_from_uint32_identity(self):
+        client = Mock()
+        client.get_routers.return_value = []
+        client.get_templates.return_value = []
+        client.get_style_catalog.return_value = []
+        client.get_tags.return_value = [
+            {"mac": "000000000001", "power": 90, "updateProgress": 1},
+            {"mac": "1", "power": 80, "updateProgress": 1},
+        ]
+        client.get_extended_tags.return_value = [
+            {"mac": "00:00:00:00:00:01", "status": 1, "width": 296, "height": 128},
+            {"mac": "0.0.0.1", "status": 1, "width": 296, "height": 128},
+        ]
+
+        self.assertEqual(self.service.sync_read_only(client)["synced"]["tags"], 2)
+        self.assertEqual(self.service.sync_read_only(client)["synced"]["tags"], 2)
+        with self.storage.connection() as connection:
+            rows = [tuple(row) for row in connection.execute(
+                "SELECT mac, COUNT(*) FROM tags WHERE mac IN (?, ?) GROUP BY mac ORDER BY mac",
+                ("00:00:00:00:00:01", "0.0.0.1"),
+            )]
+        self.assertEqual(rows, [("0.0.0.1", 1), ("00:00:00:00:00:01", 1)])
+
+    def test_template_list_exposes_only_safe_vendor_preview_urls(self):
+        with self.storage.connection() as connection:
+            connection.execute(
+                "UPDATE templates SET vendor_id = '145' WHERE id = 'tpl-default'"
+            )
+            connection.execute(
+                "INSERT INTO templates(id, controller_id, vendor_id, name, width, height, "
+                "mapping_type) VALUES ('local-template', 'legacy', 'local-template', "
+                "'Lokálna', 296, 128, 0)"
+            )
+        templates = {item["id"]: item for item in self.service.list_templates()}
+        self.assertEqual(
+            templates["tpl-default"]["preview_url"],
+            "/api/vendor/templates/145/preview?controller_id=legacy",
+        )
+        self.assertIsNone(templates["local-template"]["preview_url"])
+
+    def test_vendor_sync_preserves_unsupported_tag_dimensions_as_read_only(self):
+        client = Mock()
+        client.get_routers.return_value = []
+        client.get_templates.return_value = []
+        client.get_style_catalog.return_value = [{
+            "id": 300, "name": "Unsupported", "descriptor": "Unsupported",
+            "width": 800, "height": 480, "mappingtype": 1, "type": 2,
+        }]
+        client.get_tags.return_value = [{
+            "mac": "3232235777", "power": 70, "styleName": "Unsupported",
+            "updateProgress": 1,
+        }]
+        client.get_extended_tags.return_value = [{
+            "mac": "192.168.1.1", "styleId": 300, "status": 1,
+            "width": 800, "height": 480, "rssi": -60,
+        }]
+
+        self.service.sync_read_only(client)
+        with self.storage.connection() as connection:
+            row = connection.execute(
+                "SELECT id, width, height, device_model_id FROM tags "
+                "WHERE mac = '192.168.1.1'"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(tuple(row)[1:], (800, 480, None))
+        detail = self.service.get_tag(row["id"])
+        self.assertFalse(detail["management_supported"])
+        self.assertNotIn(row["id"], {item["id"] for item in self.service.list_tags()})
+
+    def test_vendor_sync_persists_full_catalog_with_mms_subset_and_is_idempotent(self):
+        supported = [
+            (145, 250, 132), (147, 250, 132), (149, 250, 122),
+            (158, 250, 122), (159, 296, 128), (160, 296, 128),
+        ]
+        filler = [(identifier, 400, 300) for identifier in range(200, 259)]
+        catalog = [{
+            "id": identifier, "name": f"Style {identifier}",
+            "descriptor": f"Style {identifier}", "width": width, "height": height,
+            "mappingtype": 1, "type": 2,
+        } for identifier, width, height in supported + filler]
+        client = Mock()
+        client.get_routers.return_value = []
+        client.get_templates.return_value = [{
+            "id": str(item["id"]), "name": item["name"],
+            "styleLen": f"{item['width']}x{item['height']}",
+        } for item in catalog[-4:]]
+        client.get_tags.return_value = []
+        client.get_style_catalog.return_value = catalog
+        client.get_extended_tags.return_value = []
+
+        first = self.service.sync_read_only(client)
+        second = self.service.sync_read_only(client)
+        self.assertEqual(first["synced"]["templates"], 65)
+        self.assertEqual(second["synced"]["templates"], 65)
+        with self.storage.connection() as connection:
+            rows = connection.execute(
+                "SELECT vendor_id, width, height FROM templates "
+                "WHERE vendor_id IN ('145', '147', '149', '158', '159', '160') "
+                "ORDER BY CAST(vendor_id AS INTEGER)"
+            ).fetchall()
+            catalog_count = connection.execute(
+                "SELECT COUNT(*) FROM templates WHERE vendor_id IN ("
+                + ",".join("?" for _item in catalog) + ")",
+                tuple(str(item["id"]) for item in catalog),
+            ).fetchone()[0]
+        self.assertEqual(catalog_count, 65)
+        self.assertEqual([tuple(row) for row in rows], [
+            ("145", 250, 132), ("147", 250, 132), ("149", 250, 122),
+            ("158", 250, 122), ("159", 296, 128), ("160", 296, 128),
+        ])
+
     def test_sync_audit_is_controller_distinguishable(self):
         client = Mock()
         client.get_routers.return_value = []
@@ -180,6 +345,20 @@ class ServiceTests(unittest.TestCase):
         self.assertIsNone(detail["compatible_template"])
         self.assertEqual(detail["template_compatibility"], "incompatible")
 
+        supported_payload = {
+            "controller_id": "legacy", "mac": "AA:BB:CC:DD:EE:88",
+            "label": "Converted", "device_model_id": "2.9EPD-BWR",
+            "width": 296, "height": 128, "router_id": "router-main",
+            "template_id": "tpl-default", "test_data": {},
+        }
+        with self.assertRaises(ValidationError) as caught:
+            self.service.update_tag_configuration("legacy-unsupported", supported_payload)
+        self.assertIn("unsupported", caught.exception.message.lower())
+        unchanged = self.service.get_tag("legacy-unsupported")
+        self.assertFalse(unchanged["management_supported"])
+        self.assertEqual((unchanged["width"], unchanged["height"]), (400, 300))
+        self.assertEqual(unchanged["label"], "Old hardware")
+
     def test_incompatible_historical_template_link_is_not_reported_as_compatible(self):
         with self.storage.connection() as connection:
             connection.execute(
@@ -210,6 +389,7 @@ class ServiceTests(unittest.TestCase):
         })
 
         self.assertEqual(created["mac"], "AA:BB:CC:DD:EE:FF")
+        self.assertEqual(self.storage.normalized_mac("000000000001"), "00:00:00:00:00:01")
         self.assertEqual(created["inventory_source"], "local")
         self.assertEqual(created["configuration_source"], "local")
         self.assertTrue(created["staged"])

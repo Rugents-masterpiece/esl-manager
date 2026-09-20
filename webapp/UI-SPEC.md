@@ -1,56 +1,31 @@
 # ESL Manager UI kontrakt
 
-## Navigácia
+## Navigácia a kontext
 
-Sedem hlavných pohľadov: Prehľad, Cenovky, Produkty, Šablóny, Stanice, Úlohy a Audit. Aktívna položka musí byť viditeľná aj cez `aria-current="page"`; na úzkej obrazovke sa navigácia zbalí do menu.
+Primárne pohľady sú **Cenovky**, **Šablóny** a **Controllery**. **Audit** je sekundárny pohľad. Aktívny controller sa volí v hlavičke a určuje rozsah inventára v aktuálnom pohľade. Generický produktový a job dashboard nie je súčasťou hlavnej navigácie.
 
 ## Vizuálny systém
 
-IBM Carbon-inšpirovaný offline dizajn:
+IBM Carbon-inšpirovaný offline dizajn používa lokálne systémové fonty, Gray 100 `#161616`, Gray 10 `#f4f4f4`, Blue 60 `#0f62fe`, Green `#24a148`, Yellow `#f1c21b` a Red `#da1e28`. Nepoužíva CDN. Interakčné prvky majú najmenej 48 px, viditeľný keyboard focus a responzívne desktopové aj mobilné rozloženie.
 
-- farby: Gray 100 `#161616`, Gray 10 `#f4f4f4`, Blue 60 `#0f62fe`, Green `#24a148`, Yellow `#f1c21b`, Red `#da1e28`;
-- systémový sans-serif fallback bez CDN;
-- 8 px grid, ploché povrchy, nulový radius pre karty/formuláre/tlačidlá;
-- 48 px primárne interakčné prvky, viditeľný keyboard focus;
-- tabuľky sa na mobile prepínajú na karty alebo horizontálne scrollujú bez orezania akcií.
+## Cenovky
 
-## Povinné stavy
+Zoznam obsahuje aj historické nepodporované záznamy, ktoré sú pravdivo označené a nemožno ich upravovať. Detailný drawer zobrazuje controller, RF router, práve jeden z modelov `2.13TFT-BW`, `2.13EPD-BWR`, `2.9EPD-BWR`, kompatibilnú šablónu, zdroj inventára a konfigurácie, telemetriu a testovacie JSON dáta. Escape, backdrop a tlačidlo Zavrieť drawer zatvoria a vrátia focus.
 
-Každý dátový pohľad má loading, empty, error a loaded stav. Mutácie zobrazujú priebeh a výsledok. Alerty a job status nepoužívajú iba farbu — vždy majú textový štítok.
+Pridanie cenovky validuje controller, router, model, šablónu, MAC, označenie a JSON. Vytvorí iba lokálny staging cez `/api/tags/staged`; fyzický dispatch nevykonáva. Úprava používa autentifikovaný same-origin endpoint `/api/tags/{id}/configuration`.
 
-## Obrazovky
+## Šablóny
 
-### Prehľad
+Zobrazujú sa iba rodiny 250 × 132 TFT, 250 × 122 EPD a 296 × 128 EPD. Karta uvádza controller, rozmery, serverové ID a náhľad. Clone dialóg používa štvorpoľový kontrakt `source_controller_id`, `source_template_id`, `target_controller_id`, `target_name`, vyžaduje explicitné potvrdenie a počas požiadavky blokuje opakované odoslanie. Úspech zobrazuje serverové ID a výsledok read-back overenia.
 
-KPI: počet cenoviek, online/failed, nízka batéria, produkty, otvorené alerty a čakajúce joby. Zobraziť kritické alerty a posledné úlohy.
+## Controllery
 
-### Cenovky
+Pohľad zobrazuje všetky verejne nakonfigurované controllery a ich rozsah inventára. API `/api/controllers` vracia iba `id`, `name`, `base_url`, `default`; nikdy credentials ani stav klienta.
 
-Vyhľadávanie podľa MAC/produktu, filtre status/batéria/signál/router, tabuľka inventára, výber viacerých riadkov, detail väzby a akcia vytvoriť update job.
+## Bezpečnosť a prístupnosť
 
-### Produkty
-
-SKU, EAN, názov, cena, jednotka, aktualizácia a priradená cenovka. Create/edit/delete je lokálna operácia s validáciou. CSV export musí byť dostupný bez JavaScript generovania dát.
-
-### Šablóny
-
-Názov, rozmery, typ, mapping type, dynamické polia a počet priradených cenoviek. V prvej verzii read-only voči zariadeniu.
-
-### Stanice
-
-Router ID/IP, stav, heartbeat, frekvencia, verzie a počet tagov.
-
-### Úlohy
-
-Joby a položky so stavmi queued/running/success/failed, percento úspechu, simulované spracovanie a retry iba failed položiek. Live dispatch musí jasne označiť bezpečnostný režim.
-
-### Audit
-
-Čas, typ entity, akcia, identifikátor a bezpečne serializované detaily; read-only, zoradené od najnovšieho.
-
-## Formuláre a bezpečnosť
-
-- Žiadne credentialy ani session cookie v DOM/localStorage.
-- Všetky dynamické hodnoty renderovať cez `textContent`, nie `innerHTML`.
-- Potvrdenie live zápisu je samostatný krok a UI ho nesmie simulovať ako úspešný bez API odpovede.
-- Deštruktívne fyzické DELETE operácie nie sú v UI dostupné.
+- Dynamické hodnoty sa vkladajú cez `textContent`, nie cez `innerHTML`.
+- Session token existuje iba v jednom password inpute. Nezapisuje sa do browser storage a maže sa pri close, cancel, backdrop aj úspechu.
+- Mutácie zachovávajú session autentifikáciu a kontrolu Origin na serveri.
+- Dialógy majú dostupné názvy, Escape/close/backdrop, focus return a disabled/loading stavy.
+- Každý dátový pohľad má loading, empty, error a loaded stav; stav nie je komunikovaný iba farbou.

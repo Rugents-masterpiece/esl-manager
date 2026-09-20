@@ -312,10 +312,17 @@ class Service:
         try:
             with self.storage.connection() as connection:
                 existing = connection.execute(
-                    "SELECT controller_id, inventory_source FROM tags WHERE id = ?", (tag_id,)
+                    "SELECT controller_id, inventory_source, device_model_id, width, height "
+                    "FROM tags WHERE id = ?", (tag_id,)
                 ).fetchone()
                 if existing is None:
                     raise NotFoundError("Tag not found")
+                expected_dimensions = SUPPORTED_DEVICE_MODELS.get(existing["device_model_id"])
+                if expected_dimensions != (existing["width"], existing["height"]):
+                    raise ValidationError(
+                        "Unsupported historical tag configuration cannot be changed",
+                        details={"field": "device_model_id"},
+                    )
                 controller_id, width, height, router_id, template_id = self._tag_dependencies(
                     connection, data
                 )
@@ -466,7 +473,8 @@ class Service:
         return self._tag_result(row)
 
     def list_tags(self, *, search: str | None = None, status: str | None = None,
-                  router_id: str | None = None, bound: bool | None = None) -> list[dict[str, Any]]:
+                  router_id: str | None = None, bound: bool | None = None,
+                  include_unsupported: bool = False) -> list[dict[str, Any]]:
         clauses: list[str] = []
         values: list[Any] = []
         if search is not None:
@@ -492,7 +500,9 @@ class Service:
                 + where + " ORDER BY t.mac, t.id", values
             ).fetchall()
         results = [self._tag_result(row) for row in rows]
-        return [item for item in results if item["management_supported"]]
+        return results if include_unsupported else [
+            item for item in results if item["management_supported"]
+        ]
 
     def list_routers(self, *, status: str | None = None) -> list[dict[str, Any]]:
         if status is not None and status not in {"online", "offline"}:
@@ -520,6 +530,14 @@ class Service:
             if not isinstance(fields, list) or any(not isinstance(field, str) for field in fields):
                 raise IntegrationError("Stored template fields are invalid")
             item["style_fields"] = fields
+            vendor_id = str(item.get("vendor_id") or "")
+            supported = (item.get("width"), item.get("height")) in SUPPORTED_DEVICE_MODELS.values()
+            item["preview_url"] = (
+                f"/api/vendor/templates/{int(vendor_id)}/preview?"
+                f"controller_id={quote(str(item['controller_id']), safe='')}"
+                if supported and re.fullmatch(r"[1-9][0-9]{0,9}", vendor_id)
+                else None
+            )
             results.append(item)
         return results
 
@@ -1001,6 +1019,49 @@ class Service:
             if not key or key in result:
                 raise IntegrationError(f"Invalid vendor {resource} response")
             result[key] = item
+        return result
+
+    @staticmethod
+    def _vendor_tag_identity(value: Any) -> str:
+        """Canonicalize a standard MAC or the vendor's uint32 decimal/dotted identity."""
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise IntegrationError("Invalid vendor tag identity")
+        try:
+            text = str(value).strip()
+        except (ValueError, OverflowError) as error:
+            raise IntegrationError("Invalid vendor tag identity") from error
+        standard_mac = Storage.standard_mac_identity(text)
+        if standard_mac is not None:
+            return standard_mac
+        if re.fullmatch(r"[0-9]+", text):
+            if len(text) > 10:
+                raise IntegrationError("Invalid vendor tag identity")
+            try:
+                number = int(text)
+            except (ValueError, OverflowError) as error:
+                raise IntegrationError("Invalid vendor tag identity") from error
+            if number > 0xFFFFFFFF:
+                raise IntegrationError("Invalid vendor tag identity")
+            octets = number.to_bytes(4, "big")
+            return ".".join(str(octet) for octet in octets)
+        parts = text.split(".")
+        if (len(parts) != 4
+                or any(re.fullmatch(r"[0-9]{1,3}", part) is None for part in parts)
+                or any(int(part) > 255 for part in parts)):
+            raise IntegrationError("Invalid vendor tag identity")
+        return ".".join(str(int(part)) for part in parts)
+
+    @classmethod
+    def _index_vendor_tags(cls, items: list[dict[str, Any]],
+                           resource: str) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for item in items:
+            if not isinstance(item, dict) or item.get("mac") is None:
+                raise IntegrationError(f"Invalid vendor {resource} response")
+            key = cls._vendor_tag_identity(item["mac"])
+            if key in result:
+                raise IntegrationError(f"Invalid vendor {resource} response")
+            result[key] = {**item, "mac": key}
         return result
 
     def vendor_style_catalog(self, client: Any,
@@ -1683,8 +1744,8 @@ class Service:
             raise IntegrationError("Vendor read-only sync returned invalid data")
         catalog_by_id = self._index_vendor_items(style_catalog, "id", "style catalog")
         templates_by_id = self._index_vendor_items(templates, "id", "templates")
-        extended_by_mac = self._index_vendor_items(extended_tags, "mac", "extended tags")
-        tags_by_mac = self._index_vendor_items(tags, "mac", "tags")
+        extended_by_mac = self._index_vendor_tags(extended_tags, "extended tags")
+        tags_by_mac = self._index_vendor_tags(tags, "tags")
 
         if not set(templates_by_id).issubset(catalog_by_id):
             raise IntegrationError("Vendor style catalog is missing synchronized templates")
@@ -1692,13 +1753,15 @@ class Service:
             raise IntegrationError("Vendor tag inventories do not match")
 
         merged_templates: list[dict[str, Any]] = []
-        catalog_fields = {
-            "descriptor", "width", "height", "mappingtype", "type", "backgroundID",
-            "backgroundId", "updateTime", "updatetime", "styleFileds", "rotate", "userid",
+        structural_template_fields = {
+            "id", "name", "descriptor", "width", "height", "styleLen", "mappingtype",
+            "type", "backgroundID", "backgroundId", "styleFileds", "rotate", "userid",
         }
-        for item in templates:
-            key = str(item["id"])
-            catalog_item = catalog_by_id[key]
+        for key, catalog_item in catalog_by_id.items():
+            item = templates_by_id.get(key)
+            if item is None:
+                merged_templates.append(dict(catalog_item))
+                continue
             mms_name = item.get("name")
             catalog_name = catalog_item.get("name")
             if (mms_name not in (None, "") and catalog_name not in (None, "")
@@ -1721,21 +1784,20 @@ class Service:
                         or self._vendor_integer(item, "height", minimum=1)
                         != self._vendor_integer(catalog_item, "height", minimum=1)):
                     raise IntegrationError("Vendor template dimensions conflict")
-            merged = dict(item)
-            for field in catalog_fields:
-                if field in catalog_item:
-                    merged[field] = catalog_item[field]
+            merged = dict(catalog_item)
+            for field, value in item.items():
+                if field not in structural_template_fields:
+                    merged[field] = value
             if not merged.get("name"):
-                merged["name"] = catalog_name
+                merged["name"] = mms_name
             merged_templates.append(merged)
         templates = merged_templates
 
         immutable_tag_fields = {
-            "width", "height", "styleId", "ido", "routerStatus", "sub",
+            "styleId", "ido", "routerStatus", "sub",
         }
         merged_tags: list[dict[str, Any]] = []
-        for item in tags:
-            key = str(item["mac"])
+        for key, item in tags_by_mac.items():
             extended = extended_by_mac[key]
             for field in immutable_tag_fields:
                 if field in item and field in extended:
@@ -1743,7 +1805,12 @@ class Service:
                     right = self._vendor_integer(extended, field)
                     if left != right:
                         raise IntegrationError(f"Vendor tag field conflicts: {field}")
-            merged_tags.append({**extended, **item})
+            if extended.get("width") is None or extended.get("height") is None:
+                raise IntegrationError("Vendor extended tag dimensions are missing")
+            merged_tags.append({
+                **extended, **item, "mac": key,
+                "width": extended["width"], "height": extended["height"],
+            })
         tags = merged_tags
         with self.storage.connection() as connection:
             for item in routers:
