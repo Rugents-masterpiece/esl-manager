@@ -288,7 +288,10 @@ class ControllerRegistryTests(unittest.TestCase):
 
         try:
             post("/api/sync/read-only?controller_id=south", {})
-            post("/api/vendor/templates/clone?controller_id=south", {})
+            post("/api/vendor/templates/clone", {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 145, "target_name": "Cross clone",
+            })
             with patch.dict(os.environ, {"ESL_LIVE_WRITES": "1"}):
                 post("/api/dispatch/live?controller_id=south",
                      {"confirmation": "I CONFIRM LIVE ESL UPDATE"})
@@ -308,7 +311,10 @@ class ControllerRegistryTests(unittest.TestCase):
 
         service.sync_read_only.assert_called_once_with(south, controller_id="south")
         service.clone_vendor_template.assert_called_once_with(
-            south, {}, controller_id="south"
+            north, south, {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 145, "target_name": "Cross clone",
+            }, source_controller_id="north", target_controller_id="south",
         )
         service.dispatch_live.assert_called_once_with(
             south, {"confirmation": "I CONFIRM LIVE ESL UPDATE"}, controller_id="south"
@@ -319,6 +325,42 @@ class ControllerRegistryTests(unittest.TestCase):
         service.vendor_photos.assert_called_once_with(south, controller_id="south")
         service.vendor_photo_data.assert_called_once_with(south, "photo.png")
         self.assertEqual(north.method_calls, [])
+
+    def test_clone_rejects_unknown_source_or_target_controller_before_service_call(self):
+        controllers = [
+            {"id": key, "name": key.title(), "base_url": f"http://127.0.0.1/{key}",
+             "username": "user", "password": "secret"}
+            for key in ("north", "south")
+        ]
+        registry = ControllerRegistry(controllers, "north")
+        service = Mock()
+        server = create_server(
+            "127.0.0.1", 0, service=service, controller_registry=registry,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_port}/api/vendor/templates/clone"
+        try:
+            for source_id, target_id in (("missing", "south"), ("north", "missing")):
+                request = Request(
+                    base, data=json.dumps({
+                        "source_controller_id": source_id,
+                        "target_controller_id": target_id,
+                        "source_template_id": 145,
+                        "target_name": "Unknown controller",
+                    }).encode(), method="POST", headers={"Content-Type": "application/json"},
+                )
+                with self.subTest(source=source_id, target=target_id), self.assertRaises(HTTPError) as caught:
+                    urlopen(request, timeout=2)
+                self.assertEqual(caught.exception.code, 400)
+                payload = json.loads(caught.exception.read())
+                caught.exception.close()
+                self.assertEqual(payload["error"]["message"], "Unknown controller_id")
+            service.clone_vendor_template.assert_not_called()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_rejects_unsafe_duplicate_or_implicit_controller_identity(self):
         base = {"api_token": "A" * 64, "live_writes": False, "controllers": [

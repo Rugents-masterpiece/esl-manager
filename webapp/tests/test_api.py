@@ -155,7 +155,10 @@ class ApiTests(unittest.TestCase):
                             method="POST", headers={"Content-Type": "application/json"})
             with urlopen(login, timeout=2) as response:
                 cookie = response.headers["Set-Cookie"].split(";", 1)[0]
-            body = {"source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD"}
+            body = {
+                "source_controller_id": "legacy", "target_controller_id": "legacy",
+                "source_template_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
+            }
             clone = Request(base + "/api/vendor/templates/clone", data=json.dumps(body).encode(),
                             method="POST", headers={"Content-Type": "application/json",
                                                     "Cookie": cookie, "Origin": base})
@@ -163,7 +166,8 @@ class ApiTests(unittest.TestCase):
                 self.assertEqual(response.status, 201)
                 self.assertEqual(json.loads(response.read())["id"], "200")
             service.clone_vendor_template.assert_called_once_with(
-                vendor, body, controller_id="legacy"
+                vendor, vendor, body, source_controller_id="legacy",
+                target_controller_id="legacy",
             )
 
             cross_origin = Request(
@@ -369,7 +373,8 @@ class ApiTests(unittest.TestCase):
             request = Request(
                 f"http://127.0.0.1:{protected.server_port}/api/vendor/templates/clone",
                 data=json.dumps({
-                    "source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
+                    "source_controller_id": "legacy", "target_controller_id": "legacy",
+                    "source_template_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
                 }).encode(), method="POST", headers={"Content-Type": "application/json"},
             )
             with self.assertRaises(HTTPError) as caught:
@@ -378,6 +383,39 @@ class ApiTests(unittest.TestCase):
             payload = json.loads(caught.exception.read())
             caught.exception.close()
             self.assertEqual(payload["error"]["code"], "vendor_error")
+        finally:
+            protected.shutdown()
+            protected.server_close()
+            thread.join(timeout=2)
+
+    def test_template_clone_browser_contract_rejects_legacy_body_and_query_selector(self):
+        vendor = Mock()
+        service = Mock()
+        protected = create_server(
+            "127.0.0.1", 0, service=service, vendor_client=vendor,
+        )
+        thread = threading.Thread(target=protected.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{protected.server_port}"
+        cases = (
+            ("", {"source_id": 145, "target_name": "Legacy"}),
+            ("?controller_id=legacy", {
+                "source_controller_id": "legacy", "target_controller_id": "legacy",
+                "source_template_id": 145, "target_name": "Query selector",
+            }),
+        )
+        try:
+            for suffix, body in cases:
+                request = Request(
+                    base + "/api/vendor/templates/clone" + suffix,
+                    data=json.dumps(body).encode(), method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with self.subTest(suffix=suffix), self.assertRaises(HTTPError) as caught:
+                    urlopen(request, timeout=2)
+                self.assertEqual(caught.exception.code, 400)
+                caught.exception.close()
+            service.clone_vendor_template.assert_not_called()
         finally:
             protected.shutdown()
             protected.server_close()

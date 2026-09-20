@@ -207,6 +207,40 @@ class ApiHandler(BaseHTTPRequestHandler):
             raise IntegrationError("Vendor integration is not configured")
         return client, controller_id
 
+    @staticmethod
+    def _clone_targets(server: EslHTTPServer, data: Any,
+                       query: dict[str, list[str]]) -> tuple[VendorClient, VendorClient, str, str]:
+        required = {
+            "source_controller_id", "target_controller_id",
+            "source_template_id", "target_name",
+        }
+        if query or not isinstance(data, dict) or set(data) != required:
+            raise ValidationError(
+                "JSON body must contain only source_controller_id, target_controller_id, "
+                "source_template_id and target_name"
+            )
+        source_id = data["source_controller_id"]
+        target_id = data["target_controller_id"]
+        if any(not isinstance(value, str) or CONTROLLER_ID_PATTERN.fullmatch(value) is None
+               for value in (source_id, target_id)):
+            raise ValidationError("Invalid controller_id", details={"field": "controller_id"})
+        if server.controller_registry is None:
+            if source_id != LEGACY_CONTROLLER_ID or target_id != LEGACY_CONTROLLER_ID:
+                raise ValidationError("Unknown controller_id", details={"field": "controller_id"})
+            if server.vendor_client is None:
+                raise IntegrationError("Vendor integration is not configured")
+            return server.vendor_client, server.vendor_client, source_id, target_id
+        try:
+            return (
+                server.controller_registry.get(source_id),
+                server.controller_registry.get(target_id),
+                source_id,
+                target_id,
+            )
+        except KeyError as error:
+            raise ValidationError("Unknown controller_id",
+                                  details={"field": "controller_id"}) from error
+
     def _session_id(self) -> str | None:
         raw_cookie = self.headers.get("Cookie")
         if not raw_cookie:
@@ -311,11 +345,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                     client, controller_id=controller_id
                 ))
             elif method == "POST" and path == "/api/vendor/templates/clone":
-                client, controller_id = self._required_vendor_target(server, query)
+                data = self._body()
+                source_client, target_client, source_controller_id, target_controller_id = (
+                    self._clone_targets(server, data, query)
+                )
                 self._json(
                     HTTPStatus.CREATED,
                     service.clone_vendor_template(
-                        client, self._body(), controller_id=controller_id
+                        source_client, target_client, data,
+                        source_controller_id=source_controller_id,
+                        target_controller_id=target_controller_id,
                     ),
                 )
             elif method == "POST" and path == "/api/dispatch/live":

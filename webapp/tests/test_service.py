@@ -393,6 +393,12 @@ class ServiceTests(unittest.TestCase):
                 self.target_name = "Default Template200"
                 self.created = False
                 self.deleted = False
+                self.created_id = 200
+                self.include_source = True
+                self.target_width = 250
+                self.target_height = 122
+                self.target_alignment = 9
+                self.target_screen_type = 2
                 self.next_id = 9002
                 self.unrelated_created = False
 
@@ -412,11 +418,14 @@ class ServiceTests(unittest.TestCase):
 
             def get_style_catalog(self):
                 self.calls.append(("catalog",))
-                items = [{"id": 145, "name": "S21BasePriceTag_V1", "width": 250,
-                          "height": 122, "mappingtype": 291, "type": 2}]
+                items = []
+                if self.include_source:
+                    items.append({"id": 145, "name": "S21BasePriceTag_V1", "width": 250,
+                                  "height": 122, "mappingtype": 291, "type": 2})
                 if self.created and not self.deleted:
-                    items.append({"id": 200, "name": self.target_name, "width": 250,
-                                  "height": 122, "mappingtype": 700, "type": 2})
+                    items.append({"id": self.created_id, "name": self.target_name,
+                                  "width": self.target_width, "height": self.target_height,
+                                  "mappingtype": 700, "type": self.target_screen_type})
                 if self.unrelated_created:
                     items.append({"id": 201, "name": "Concurrent unrelated template", "width": 400,
                                   "height": 300, "mappingtype": 701, "type": 4})
@@ -424,39 +433,52 @@ class ServiceTests(unittest.TestCase):
 
             def get_style_data(self, style_id):
                 self.calls.append(("data", style_id))
-                if style_id == 145:
+                if style_id == 145 and self.include_source:
                     return {"id": 145, "name": "S21BasePriceTag_V1", "mappingtype": 291,
                             "width": 250, "height": 122, "type": 9,
                             "dispMs": self.detail_layout(self.source_layout, 145)}
                 if style_id == 201:
                     return {"id": 201, "name": "Concurrent unrelated template", "mappingtype": 701,
                             "styleFileds": ["other"], "dispMs": []}
-                return {"id": 200, "name": self.target_name, "mappingtype": 700,
-                        "width": 250, "height": 122, "type": 9,
-                        "dispMs": self.detail_layout(self.target_layout, 200)}
+                return {"id": self.created_id, "name": self.target_name, "mappingtype": 700,
+                        "width": self.target_width, "height": self.target_height,
+                        "type": self.target_alignment,
+                        "dispMs": self.detail_layout(self.target_layout, self.created_id)}
 
             def get_style_detail(self, style_id):
                 self.calls.append(("metadata", style_id))
-                if style_id == 145:
+                if style_id == 145 and self.include_source:
                     return {"id": 145, "name": "S21BasePriceTag_V1", "width": 250,
                             "height": 122, "mappingtype": 291, "type": 2,
                             "styleFileds": ["name", "price", "logo"]}
-                return {"id": 200, "name": self.target_name, "width": 250,
-                        "height": 122, "mappingtype": 700, "type": 2,
+                return {"id": self.created_id, "name": self.target_name,
+                        "width": self.target_width, "height": self.target_height,
+                        "mappingtype": 700,
+                        "type": self.target_screen_type,
                         "styleFileds": [item["mpname"] for item in self.target_layout]}
 
             def get_style_layout(self, style_id):
                 self.calls.append(("layout", style_id))
-                return copy.deepcopy(self.source_layout if style_id == 145 else self.target_layout)
+                return copy.deepcopy(
+                    self.source_layout if style_id == 145 and self.include_source
+                    else self.target_layout
+                )
 
             def get_template_preview(self, style_id):
                 self.calls.append(("preview", style_id))
-                return (b"source-preview" if style_id == 145 else b"target-preview", "image/png")
+                return (b"source-preview" if style_id == 145 and self.include_source
+                        else b"target-preview", "image/png")
 
             def create_style(self, style_align) -> int:
                 self.calls.append(("create", style_align))
+                dimensions, screen_type = {
+                    9: ((250, 122), 2), 8: ((250, 132), 1), 2: ((296, 128), 2),
+                }[style_align]
+                self.target_width, self.target_height = dimensions
+                self.target_alignment = style_align
+                self.target_screen_type = screen_type
                 self.created = True
-                return 200
+                return self.created_id
 
             def add_style_field(self, style_id, mapping_type, column_name, mapping_text):
                 self.calls.append(("field", style_id, mapping_type, column_name, mapping_text))
@@ -483,6 +505,49 @@ class ServiceTests(unittest.TestCase):
 
         return FakeCloneClient()
 
+    @staticmethod
+    def _remap_clone_source(client, source_id, width, height, alignment, screen_type):
+        original_catalog = client.get_style_catalog
+        original_data = client.get_style_data
+        original_metadata = client.get_style_detail
+        original_layout = client.get_style_layout
+        original_preview = client.get_template_preview
+
+        def catalog():
+            items = original_catalog()
+            source = next(item for item in items if item["id"] == 145)
+            source.update({"id": source_id, "width": width, "height": height,
+                           "type": screen_type})
+            return items
+
+        def data(style_id):
+            if style_id != source_id:
+                return original_data(style_id)
+            result = original_data(145)
+            result.update({"id": source_id, "width": width, "height": height,
+                           "type": alignment})
+            for component in result["dispMs"]:
+                component["styleid"] = source_id
+            return result
+
+        def metadata(style_id):
+            if style_id != source_id:
+                return original_metadata(style_id)
+            result = original_metadata(145)
+            result.update({"id": source_id, "width": width, "height": height,
+                           "type": screen_type})
+            return result
+
+        client.get_style_catalog = catalog
+        client.get_style_data = data
+        client.get_style_detail = metadata
+        client.get_style_layout = lambda style_id: (
+            original_layout(145) if style_id == source_id else original_layout(style_id)
+        )
+        client.get_template_preview = lambda style_id: (
+            original_preview(145) if style_id == source_id else original_preview(style_id)
+        )
+
     def test_clone_template_deep_copies_bold_layout_with_server_ids_and_audit(self):
         client = self._clone_client()
         source_before = copy.deepcopy(client.source_layout)
@@ -508,6 +573,196 @@ class ServiceTests(unittest.TestCase):
         event = self.service.list_audit(action="vendor.template.cloned")[0]
         self.assertEqual(event["entity_id"], "200")
         self.assertEqual(event["details"]["source_id"], 145)
+
+    def test_cross_controller_clone_reads_source_and_mutates_only_target(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        source_before = copy.deepcopy(source.source_layout)
+
+        result = self.service.clone_vendor_template(source, target, {
+            "source_controller_id": "north", "target_controller_id": "south",
+            "source_template_id": 145, "target_name": "Cross controller bold",
+        }, source_controller_id="north", target_controller_id="south")
+
+        self.assertEqual(result["id"], "200")
+        self.assertEqual(result["source_template_id"], "145")
+        self.assertEqual(result["source_controller_id"], "north")
+        self.assertEqual(result["target_controller_id"], "south")
+        self.assertEqual(source.source_layout, source_before)
+        self.assertFalse(any(call[0] in {"create", "field", "rename", "save", "delete"}
+                             for call in source.calls))
+        saved = next(call[2] for call in target.calls if call[0] == "save")
+        self.assertEqual([item["id"] for item in saved], [9001, 9002, 9003])
+        self.assertTrue(all(item["id"] not in {501, 502, 503} for item in saved))
+        self.assertEqual(
+            {call[2] for call in target.calls if call[0] == "field"}, {700}
+        )
+
+    def test_explicit_same_controller_contract_keeps_single_client_safety_guards(self):
+        client = self._clone_client()
+
+        result = self.service.clone_vendor_template(client, client, {
+            "source_controller_id": "north", "target_controller_id": "north",
+            "source_template_id": 145, "target_name": "Same controller explicit",
+        }, source_controller_id="north", target_controller_id="north")
+
+        self.assertEqual(result["id"], "200")
+        self.assertEqual(result["source_controller_id"], "north")
+        self.assertEqual(result["target_controller_id"], "north")
+        self.assertEqual(sum(call[0] == "create" for call in client.calls), 1)
+        self.assertNotIn(("delete", 145), client.calls)
+
+    def test_cross_controller_allows_isolated_template_id_collision(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        target.include_source = False
+        target.created_id = 145
+
+        result = self.service.clone_vendor_template(source, target, {
+            "source_controller_id": "north", "target_controller_id": "south",
+            "source_template_id": 145, "target_name": "Same numeric id isolated",
+        }, source_controller_id="north", target_controller_id="south")
+
+        self.assertEqual(result["id"], "145")
+        self.assertFalse(any(call[0] == "delete" for call in target.calls))
+
+    def test_cross_controller_clone_accepts_supported_dimensions_not_source_id_allowlist(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        self._remap_clone_source(source, 777, 250, 122, 9, 2)
+
+        result = self.service.clone_vendor_template(source, target, {
+            "source_controller_id": "north", "target_controller_id": "south",
+            "source_template_id": 777, "target_name": "Remapped source",
+        }, source_controller_id="north", target_controller_id="south")
+
+        self.assertEqual(result["source_id"], "777")
+        self.assertIn(("create", 9), target.calls)
+
+    def test_cross_controller_clone_supports_exactly_all_three_model_dimensions(self):
+        models = ((250, 122, 9, 2), (250, 132, 8, 1), (296, 128, 2, 2))
+        for width, height, alignment, screen_type in models:
+            source = self._clone_client()
+            target = self._clone_client()
+            self._remap_clone_source(source, 777, width, height, alignment, screen_type)
+
+            with self.subTest(dimensions=(width, height)):
+                result = self.service.clone_vendor_template(source, target, {
+                    "source_controller_id": "north", "target_controller_id": "south",
+                    "source_template_id": 777,
+                    "target_name": f"Supported {width}x{height}",
+                }, source_controller_id="north", target_controller_id="south")
+
+            self.assertEqual(result["id"], "200")
+            self.assertIn(("create", alignment), target.calls)
+
+    def test_cross_controller_clone_rejects_unsupported_dimensions_before_target_mutation(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        self._remap_clone_source(source, 777, 400, 300, 4, 4)
+
+        with self.assertRaisesRegex(ValidationError, "dimensions"):
+            self.service.clone_vendor_template(source, target, {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 777, "target_name": "Unsupported",
+            }, source_controller_id="north", target_controller_id="south")
+
+        self.assertFalse(any(call[0] in {"create", "field", "rename", "save", "delete"}
+                             for call in target.calls))
+
+    def test_cross_controller_clone_rejects_inconsistent_source_dimensions_before_create(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        original_data = source.get_style_data
+
+        def inconsistent_data(style_id):
+            result = original_data(style_id)
+            if style_id == 145:
+                result["height"] = 132
+            return result
+
+        source.get_style_data = inconsistent_data
+        with self.assertRaisesRegex(IntegrationError, "dimensions"):
+            self.service.clone_vendor_template(source, target, {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 145, "target_name": "Inconsistent source",
+            }, source_controller_id="north", target_controller_id="south")
+
+        self.assertFalse(any(call[0] == "create" for call in target.calls))
+
+    def test_cross_controller_source_failure_never_mutates_target(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        source.get_style_detail = Mock(side_effect=RuntimeError("source failed"))
+
+        with self.assertRaises(IntegrationError):
+            self.service.clone_vendor_template(source, target, {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 145, "target_name": "Never created",
+            }, source_controller_id="north", target_controller_id="south")
+
+        self.assertFalse(any(call[0] in {"create", "field", "rename", "save", "delete"}
+                             for call in target.calls))
+
+    def test_cross_controller_ambiguous_create_reads_back_once_without_rollback(self):
+        source = self._clone_client()
+        target = self._clone_client()
+
+        def ambiguous_create(style_align):
+            target.calls.append(("create", style_align))
+            target.created = True
+            raise RuntimeError("response lost")
+
+        target.create_style = ambiguous_create
+        with self.assertRaisesRegex(IntegrationError, "create outcome"):
+            self.service.clone_vendor_template(source, target, {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 145, "target_name": "Ambiguous",
+            }, source_controller_id="north", target_controller_id="south")
+
+        self.assertEqual(sum(call[0] == "create" for call in target.calls), 1)
+        self.assertEqual(sum(call[0] == "catalog" for call in target.calls), 2)
+        self.assertFalse(any(call[0] == "delete" for call in target.calls))
+
+    def test_cross_controller_partial_failure_rolls_back_only_response_owned_target(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        target.save_style_layout = Mock(side_effect=RuntimeError("save failed"))
+
+        with self.assertRaises(IntegrationError):
+            self.service.clone_vendor_template(source, target, {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 145, "target_name": "Owned target",
+            }, source_controller_id="north", target_controller_id="south")
+
+        self.assertIn(("delete", 200), target.calls)
+        self.assertFalse(any(call[0] == "delete" for call in source.calls))
+        self.assertNotIn(("delete", 145), target.calls)
+
+    def test_cross_controller_source_hash_change_fails_and_rolls_back_owned_target(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        original_layout = source.get_style_layout
+        reads = 0
+
+        def changed_layout(style_id):
+            nonlocal reads
+            result = original_layout(style_id)
+            if style_id == 145:
+                reads += 1
+                if reads > 1:
+                    result[0]["text"] = "source changed"
+            return result
+
+        source.get_style_layout = changed_layout
+        with self.assertRaisesRegex(IntegrationError, "Source vendor template changed"):
+            self.service.clone_vendor_template(source, target, {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 145, "target_name": "Source hash guard",
+            }, source_controller_id="north", target_controller_id="south")
+
+        self.assertEqual(reads, 2)
+        self.assertIn(("delete", 200), target.calls)
 
     def test_clone_audit_identity_is_controller_distinguishable(self):
         client = self._clone_client()
@@ -543,6 +798,18 @@ class ServiceTests(unittest.TestCase):
                 "source_id": 145, "target_name": "Already there",
             })
         self.assertFalse(any(call[0] == "create" for call in client.calls))
+
+    def test_legacy_clone_rejects_invalid_source_id_with_legacy_error_contract(self):
+        for source_id in ([], {}, True, 145.0, 999):
+            client = self._clone_client()
+            with self.subTest(source_id=source_id):
+                with self.assertRaises(ValidationError) as caught:
+                    self.service.clone_vendor_template(client, {
+                        "source_id": source_id, "target_name": "Invalid legacy source",
+                    })
+                self.assertEqual(caught.exception.message, "Unsupported source_id")
+                self.assertEqual(caught.exception.details, {"field": "source_id"})
+                self.assertFalse(any(call[0] == "catalog" for call in client.calls))
 
     def test_clone_rolls_back_only_created_id_and_verifies_absence(self):
         client = self._clone_client()
@@ -737,6 +1004,25 @@ class ServiceTests(unittest.TestCase):
                 "source_id": 145, "target_name": "S21BasePriceTag_V1_BOLD",
             })
         self.assertIn(("delete", 200), client.calls)
+
+    def test_clone_rejects_target_mappingtype_changed_after_component_creation(self):
+        source = self._clone_client()
+        target = self._clone_client()
+        original_detail = target.get_style_detail
+
+        def changed_mappingtype(style_id):
+            result = original_detail(style_id)
+            if style_id == 200:
+                result["mappingtype"] = 291
+            return result
+
+        target.get_style_detail = changed_mappingtype
+        with self.assertRaisesRegex(IntegrationError, "mappingtype"):
+            self.service.clone_vendor_template(source, target, {
+                "source_controller_id": "north", "target_controller_id": "south",
+                "source_template_id": 145, "target_name": "Mapping guard",
+            }, source_controller_id="north", target_controller_id="south")
+        self.assertIn(("delete", 200), target.calls)
 
     def test_clone_maps_preflight_vendor_failure_to_integration_error(self):
         client = self._clone_client()

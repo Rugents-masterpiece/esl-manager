@@ -87,6 +87,11 @@ class Service:
 
     PRODUCT_FIELDS = {"sku", "ean", "name", "price", "currency", "template_id"}
     CLONE_SOURCES = {145: 9, 147: 8, 149: 2}
+    CLONE_MODELS = {
+        (250, 122): (9, 2),
+        (250, 132): (8, 1),
+        (296, 128): (2, 2),
+    }
     TAG_CONFIGURATION_FIELDS = {
         "controller_id", "mac", "label", "device_model_id", "width", "height",
         "router_id", "template_id", "test_data",
@@ -1266,7 +1271,8 @@ class Service:
     def _verify_clone_readback(cls, source: dict[str, Any], target_catalog: dict[str, Any],
                                target_detail: Any, target_metadata: Any,
                                target_layout: Any, desired_layout: list[dict[str, Any]],
-                               source_id: int, created_id: int, target_name: str) -> None:
+                               source_id: int, created_id: int, target_name: str,
+                               style_alignment: int, target_mapping_type: int) -> None:
         if (not isinstance(target_detail, dict) or target_detail.get("id") != created_id
                 or not isinstance(target_metadata, dict)
                 or target_metadata.get("id") != created_id):
@@ -1274,6 +1280,15 @@ class Service:
         if (str(target_detail.get("name", "")).strip() != target_name
                 or str(target_metadata.get("name", "")).strip() != target_name):
             raise IntegrationError("Vendor template name could not be verified")
+        for record in (target_catalog, target_detail, target_metadata):
+            readback_mapping_type = cls._vendor_integer_value(
+                cls._clone_metadata_value(
+                    record, ("mappingtype", "mappingType"), "mappingtype"
+                ),
+                "mappingtype", minimum=1,
+            )
+            if readback_mapping_type != target_mapping_type:
+                raise IntegrationError("Vendor target mappingtype changed during clone")
         # Saving through /mms/updateDispMData normalizes mpname even though the
         # dynamic-field set remains authoritative in styleFileds. Compare every
         # other editor property here and verify field identity separately below.
@@ -1311,9 +1326,9 @@ class Service:
             "style alignment",
         )
         if (cls._vendor_integer_value(source_alignment, "style alignment", minimum=1)
-                != cls.CLONE_SOURCES[source_id]
+                != style_alignment
                 or cls._vendor_integer_value(target_alignment, "style alignment", minimum=1)
-                != cls.CLONE_SOURCES[source_id]):
+                != style_alignment):
             raise IntegrationError("Vendor template style alignment changed during clone")
 
         source_screen_type = cls._clone_metadata_value(
@@ -1353,15 +1368,45 @@ class Service:
                 or len(target_names) != len(target_layout) or target_names != source_names):
             raise IntegrationError("Vendor template component identities changed during clone")
 
-    def clone_vendor_template(self, client: Any, data: Any, *,
-                              controller_id: str = LEGACY_CONTROLLER_ID) -> dict[str, Any]:
-        """Clone one allow-listed template with reconciled, read-back-verified mutations."""
-        if not isinstance(data, dict) or set(data) != {"source_id", "target_name"}:
-            raise ValidationError("JSON body must contain only source_id and target_name")
-        source_id = data["source_id"]
+    def clone_vendor_template(self, source_client: Any, target_client_or_data: Any,
+                              data: Any | None = None, *,
+                              source_controller_id: str = LEGACY_CONTROLLER_ID,
+                              target_controller_id: str = LEGACY_CONTROLLER_ID,
+                              controller_id: str | None = None) -> dict[str, Any]:
+        """Clone one supported-model template with reconciled, verified mutations."""
+        legacy_contract = data is None
+        if legacy_contract:
+            target_client = source_client
+            data = target_client_or_data
+            selected_controller = controller_id or source_controller_id
+            source_controller_id = selected_controller
+            target_controller_id = selected_controller
+            if not isinstance(data, dict) or set(data) != {"source_id", "target_name"}:
+                raise ValidationError("JSON body must contain only source_id and target_name")
+            source_id = data["source_id"]
+            if (isinstance(source_id, bool) or not isinstance(source_id, int)
+                    or source_id not in self.CLONE_SOURCES):
+                raise ValidationError("Unsupported source_id", details={"field": "source_id"})
+        else:
+            target_client = target_client_or_data
+            required = {
+                "source_controller_id", "target_controller_id",
+                "source_template_id", "target_name",
+            }
+            if not isinstance(data, dict) or set(data) != required:
+                raise ValidationError(
+                    "JSON body must contain only source_controller_id, target_controller_id, "
+                    "source_template_id and target_name"
+                )
+            if (data["source_controller_id"] != source_controller_id
+                    or data["target_controller_id"] != target_controller_id):
+                raise ValidationError("Controller identity mismatch",
+                                      details={"field": "controller_id"})
+            source_id = data["source_template_id"]
         if (isinstance(source_id, bool) or not isinstance(source_id, int)
-                or source_id not in self.CLONE_SOURCES):
-            raise ValidationError("Unsupported source_id", details={"field": "source_id"})
+                or not 0 < source_id <= 2_147_483_647):
+            raise ValidationError("Unsupported source_template_id",
+                                  details={"field": "source_template_id"})
         target_name = _text(data["target_name"], "target_name")
         assert target_name is not None
         if any(ord(character) < 32 or character in "/\\?#" for character in target_name):
@@ -1371,40 +1416,89 @@ class Service:
         rollback_names = {target_name}
         preexisting_ids: set[int] = set()
         try:
-            before = self._clone_catalog(client)
-            before_by_id = self._catalog_by_id(before)
-            if source_id not in before_by_id:
+            source_catalog = self._clone_catalog(source_client)
+            source_by_id = self._catalog_by_id(source_catalog)
+            if source_id not in source_by_id:
                 raise NotFoundError("Source vendor template not found")
+            before = (source_catalog if source_client is target_client
+                      else self._clone_catalog(target_client))
+            before_by_id = self._catalog_by_id(before)
             if any(str(item.get("name", "")).strip() == target_name for item in before):
                 raise ConflictError("Target vendor template name already exists")
             source_snapshot, source_hash = self._source_snapshot(
-                client, source_id, before_by_id[source_id]
+                source_client, source_id, source_by_id[source_id]
             )
+            def snapshot_dimensions(record: dict[str, Any]) -> tuple[int, int]:
+                return (
+                    self._vendor_integer_value(
+                        self._clone_metadata_value(record, ("width",), "width"),
+                        "width", minimum=1,
+                    ),
+                    self._vendor_integer_value(
+                        self._clone_metadata_value(record, ("height",), "height"),
+                        "height", minimum=1,
+                    ),
+                )
+
+            source_dimensions = {
+                snapshot_dimensions(record)
+                for record in (
+                    source_snapshot["catalog"], source_snapshot["metadata"],
+                    source_snapshot["detail"],
+                )
+            }
+            if len(source_dimensions) != 1:
+                raise IntegrationError("Vendor source template dimensions are inconsistent")
+            dimensions = next(iter(source_dimensions))
+            if dimensions not in self.CLONE_MODELS:
+                raise ValidationError(
+                    "Unsupported source template dimensions",
+                    details={"field": "source_template_id"},
+                )
+            style_alignment, screen_type = self.CLONE_MODELS[dimensions]
+            source_alignment = self._vendor_integer_value(
+                self._clone_metadata_value(
+                    source_snapshot["detail"],
+                    ("stylealign", "styleAlign", "stylealignId", "styleAlignId", "type"),
+                    "style alignment",
+                ),
+                "style alignment", minimum=1,
+            )
+            source_screen_types = {
+                self._vendor_integer_value(
+                    self._clone_metadata_value(record, ("screenType", "screen_type", "type"),
+                                               "screen type"),
+                    "screen type", minimum=1,
+                )
+                for record in (source_snapshot["catalog"], source_snapshot["metadata"])
+            }
+            if source_alignment != style_alignment or source_screen_types != {screen_type}:
+                raise IntegrationError("Vendor source template model metadata is inconsistent")
             preexisting_ids = set(before_by_id)
             try:
-                response_id = client.create_style(self.CLONE_SOURCES[source_id])
+                response_id = target_client.create_style(style_alignment)
             except Exception as create_error:
                 # Re-read only for diagnostics. Without a response ID no object is owned.
                 try:
-                    self._clone_catalog(client)
+                    self._clone_catalog(target_client)
                 except Exception:
                     pass
                 raise IntegrationError("Vendor create outcome is ambiguous") from create_error
             response_id = self._vendor_integer_value(
                 response_id, "created style id", minimum=1, maximum=2_147_483_647
             )
-            after_create = self._clone_catalog(client)
+            after_create = self._clone_catalog(target_client)
             after_create_by_id = self._catalog_by_id(after_create)
             new_ids = set(after_create_by_id) - preexisting_ids
             if response_id in preexisting_ids or response_id not in new_ids:
                 raise IntegrationError("Vendor create outcome is ambiguous")
             created_id = response_id
             rollback_names.add(str(after_create_by_id[created_id].get("name", "")).strip())
-            if created_id == source_id:
+            if source_client is target_client and created_id == source_id:
                 raise IntegrationError("Vendor create returned the source template id")
 
-            target_detail = client.get_style_data(created_id)
-            target_layout = client.get_style_layout(created_id)
+            target_detail = target_client.get_style_data(created_id)
+            target_layout = target_client.get_style_layout(created_id)
             source_components = self._components_by_identity(source_snapshot["layout"])
             target_components = self._components_by_identity(target_layout, allow_empty=True)
             mapping_type = self._vendor_integer_value(
@@ -1415,39 +1509,39 @@ class Service:
                     continue
                 column_name = str(source_component.get("type") or "text")
                 try:
-                    client.add_style_field(
+                    target_client.add_style_field(
                         created_id, mapping_type, column_name, identity
                     )
                 except Exception:
                     pass
                 # Fresh read-back reconciles success, including an ambiguous status.
-                target_detail = client.get_style_data(created_id)
-                target_layout = client.get_style_layout(created_id)
+                target_detail = target_client.get_style_data(created_id)
+                target_layout = target_client.get_style_layout(created_id)
                 target_components = self._components_by_identity(target_layout)
                 if identity not in target_components:
                     raise IntegrationError("Vendor field creation could not be verified")
 
             desired_layout = self._bold_target_layout(source_snapshot["layout"], target_layout)
             try:
-                client.rename_style(created_id, self.CLONE_SOURCES[source_id], target_name)
+                target_client.rename_style(created_id, style_alignment, target_name)
             except Exception:
                 pass
-            renamed_catalog = self._catalog_by_id(self._clone_catalog(client))
-            renamed_detail = client.get_style_data(created_id)
+            renamed_catalog = self._catalog_by_id(self._clone_catalog(target_client))
+            renamed_detail = target_client.get_style_data(created_id)
             if (created_id not in renamed_catalog
                     or str(renamed_catalog[created_id].get("name", "")).strip() != target_name
                     or str(renamed_detail.get("name", "")).strip() != target_name):
                 raise IntegrationError("Vendor template rename could not be verified")
 
             try:
-                client.save_style_layout(created_id, desired_layout)
+                target_client.save_style_layout(created_id, desired_layout)
             except Exception:
                 pass
-            verified_detail = client.get_style_data(created_id)
-            verified_layout = client.get_style_layout(created_id)
-            verified_metadata = client.get_style_detail(created_id)
-            verified_preview = client.get_template_preview(created_id)
-            final_catalog = self._catalog_by_id(self._clone_catalog(client))
+            verified_detail = target_client.get_style_data(created_id)
+            verified_layout = target_client.get_style_layout(created_id)
+            verified_metadata = target_client.get_style_detail(created_id)
+            verified_preview = target_client.get_template_preview(created_id)
+            final_catalog = self._catalog_by_id(self._clone_catalog(target_client))
             if (created_id not in final_catalog
                     or str(final_catalog[created_id].get("name", "")).strip() != target_name
                     or not isinstance(verified_preview, tuple) or len(verified_preview) != 2
@@ -1458,10 +1552,14 @@ class Service:
             self._verify_clone_readback(
                 source_snapshot, final_catalog[created_id], verified_detail, verified_metadata,
                 verified_layout, desired_layout, source_id, created_id, target_name,
+                style_alignment, mapping_type,
             )
 
+            final_source_catalog = self._catalog_by_id(self._clone_catalog(source_client))
+            if source_id not in final_source_catalog:
+                raise IntegrationError("Source vendor template changed during clone")
             final_source, final_source_hash = self._source_snapshot(
-                client, source_id, final_catalog[source_id]
+                source_client, source_id, final_source_catalog[source_id]
             )
             if final_source_hash != source_hash:
                 raise IntegrationError("Source vendor template changed during clone")
@@ -1469,17 +1567,23 @@ class Service:
                 "id": str(created_id),
                 "name": target_name,
                 "source_id": str(source_id),
+                "source_template_id": str(source_id),
+                "source_controller_id": source_controller_id,
+                "target_controller_id": target_controller_id,
                 "layout_sha256": self._clone_hash(verified_layout),
                 "preview_sha256": hashlib.sha256(verified_preview[0]).hexdigest(),
                 "source_sha256": self._source_snapshot_hash(final_source),
             }
             with self.storage.connection() as connection:
-                audit_id = (str(created_id) if controller_id == LEGACY_CONTROLLER_ID
-                            else f"{controller_id}:{created_id}")
+                audit_id = (str(created_id) if target_controller_id == LEGACY_CONTROLLER_ID
+                            else f"{target_controller_id}:{created_id}")
                 self._audit(connection, "vendor.template.cloned", "template", audit_id, {
-                    "controller_id": controller_id,
+                    "controller_id": target_controller_id,
+                    "source_controller_id": source_controller_id,
+                    "target_controller_id": target_controller_id,
                     "vendor_template_id": str(created_id),
-                    "source_id": source_id, "target_name": target_name,
+                    "source_id": source_id, "source_template_id": source_id,
+                    "target_name": target_name,
                     "layout_sha256": result["layout_sha256"],
                     "preview_sha256": result["preview_sha256"],
                 })
@@ -1490,7 +1594,7 @@ class Service:
             if created_id is not None:
                 try:
                     self._rollback_created_style(
-                        client, created_id, preexisting_ids, rollback_names
+                        target_client, created_id, preexisting_ids, rollback_names
                     )
                 except Exception as rollback_error:
                     raise IntegrationError(
