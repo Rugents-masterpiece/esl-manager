@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import sqlite3
 import tempfile
@@ -132,6 +133,165 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("product.created", actions)
         self.assertIn("product.updated", actions)
         self.assertIn("product.deleted", actions)
+
+    def test_tag_list_and_detail_include_controller_hardware_and_local_data(self):
+        with self.storage.connection() as connection:
+            connection.execute("UPDATE controllers SET name = 'Legacy north'")
+            connection.execute(
+                "UPDATE tags SET device_model_id = '2.9EPD-BWR', test_data = ?, "
+                "inventory_source = 'vendor', configuration_source = 'vendor' "
+                "WHERE id = 'tag-001'",
+                (json.dumps({"price": "6.49", "name": "Káva"}),),
+            )
+
+        listed = next(item for item in self.service.list_tags() if item["id"] == "tag-001")
+        detail = self.service.get_tag("tag-001")
+
+        for item in (listed, detail):
+            self.assertEqual(item["controller"], {
+                "id": "legacy", "name": "Legacy north", "is_default": True,
+            })
+            self.assertEqual(item["rf_router"]["id"], "router-main")
+            self.assertEqual(item["device_model"]["id"], "2.9EPD-BWR")
+            self.assertEqual((item["device_model"]["width"], item["device_model"]["height"]),
+                             (296, 128))
+            self.assertEqual(item["compatible_template"]["id"], "tpl-default")
+            self.assertEqual(item["test_data"], {"price": "6.49", "name": "Káva"})
+            self.assertEqual(item["inventory_source"], "vendor")
+            self.assertEqual(item["configuration_source"], "vendor")
+            self.assertFalse(item["staged"])
+
+    def test_unsupported_inventory_is_preserved_but_excluded_from_supported_management(self):
+        with self.storage.connection() as connection:
+            connection.execute(
+                "INSERT INTO tags(id, controller_id, vendor_id, mac, label, width, height, "
+                "battery, rssi, status, router_id, template_id) VALUES "
+                "('legacy-unsupported', 'legacy', 'legacy-unsupported', "
+                "'AA:BB:CC:DD:EE:88', 'Old hardware', 400, 300, 80, -50, 'ready', "
+                "'router-main', 'tpl-default')"
+            )
+
+        self.assertNotIn("legacy-unsupported", {item["id"] for item in self.service.list_tags()})
+        detail = self.service.get_tag("legacy-unsupported")
+        self.assertEqual((detail["width"], detail["height"]), (400, 300))
+        self.assertIsNone(detail["device_model"])
+        self.assertEqual(detail["device_model_state"], "unsupported")
+        self.assertFalse(detail["management_supported"])
+        self.assertIsNone(detail["compatible_template"])
+        self.assertEqual(detail["template_compatibility"], "incompatible")
+
+    def test_incompatible_historical_template_link_is_not_reported_as_compatible(self):
+        with self.storage.connection() as connection:
+            connection.execute(
+                "INSERT INTO controllers(id, name, is_default) VALUES ('south', 'South', 0)"
+            )
+            connection.execute(
+                "INSERT INTO templates(id, controller_id, vendor_id, name, width, height) "
+                "VALUES ('south-template', 'south', '1', 'South template', 296, 128)"
+            )
+            connection.execute(
+                "UPDATE tags SET device_model_id = '2.9EPD-BWR', "
+                "template_id = 'south-template' WHERE id = 'tag-001'"
+            )
+
+        detail = self.service.get_tag("tag-001")
+        self.assertEqual(detail["device_model_state"], "supported")
+        self.assertTrue(detail["management_supported"])
+        self.assertIsNone(detail["compatible_template"])
+        self.assertEqual(detail["template_compatibility"], "incompatible")
+        self.assertEqual(detail["template_id"], "south-template")
+
+    def test_create_staged_tag_normalizes_mac_and_audits_controller_identity(self):
+        created = self.service.create_staged_tag({
+            "id": "tag-local", "controller_id": "legacy", "mac": "aabb.ccdd.eeff",
+            "label": "Local shelf", "device_model_id": "2.9EPD-BWR",
+            "width": 296, "height": 128, "router_id": "router-main",
+            "template_id": "tpl-default", "test_data": {"name": "Test", "price": 1.25},
+        })
+
+        self.assertEqual(created["mac"], "AA:BB:CC:DD:EE:FF")
+        self.assertEqual(created["inventory_source"], "local")
+        self.assertEqual(created["configuration_source"], "local")
+        self.assertTrue(created["staged"])
+        self.assertEqual(created["test_data"], {"name": "Test", "price": 1.25})
+        event = self.service.list_audit(action="tag.staged")[0]
+        self.assertEqual(event["entity_id"], "tag-local")
+        self.assertEqual(event["details"]["controller_id"], "legacy")
+        self.assertEqual(event["details"]["mac"], "AA:BB:CC:DD:EE:FF")
+
+    def test_update_tag_configuration_is_local_and_preserves_vendor_inventory_origin(self):
+        updated = self.service.update_tag_configuration("tag-001", {
+            "controller_id": "legacy", "mac": "0011-2233-4455", "label": "Local override",
+            "device_model_id": "2.9EPD-BWR", "width": 296, "height": 128,
+            "router_id": "router-main", "template_id": "tpl-default",
+            "test_data": {"name": "Override"},
+        })
+
+        self.assertEqual(updated["mac"], "00:11:22:33:44:55")
+        self.assertEqual(updated["inventory_source"], "vendor")
+        self.assertEqual(updated["configuration_source"], "local")
+        self.assertFalse(updated["staged"])
+        self.assertEqual(updated["label"], "Local override")
+        event = self.service.list_audit(action="tag.configuration.updated")[0]
+        self.assertEqual(event["details"]["controller_id"], "legacy")
+        self.assertEqual(event["details"]["inventory_source"], "vendor")
+
+    def test_staged_tag_validation_rejects_collisions_unknowns_and_cross_controller_links(self):
+        with self.storage.connection() as connection:
+            connection.execute("UPDATE controllers SET is_default = 0")
+            connection.executemany(
+                "INSERT INTO controllers(id, name, is_default) VALUES (?, ?, ?)",
+                [("north", "North", 1), ("south", "South", 0)],
+            )
+            connection.executemany(
+                "INSERT INTO routers(id, controller_id, vendor_id, name, address, status) "
+                "VALUES (?, ?, ?, ?, ?, 'online')",
+                [("north-router", "north", "1", "North router", "10.0.0.1"),
+                 ("south-router", "south", "1", "South router", "10.0.1.1")],
+            )
+            connection.executemany(
+                "INSERT INTO templates(id, controller_id, vendor_id, name, width, height) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [("north-template", "north", "1", "North template", 250, 122),
+                 ("south-template", "south", "1", "South template", 250, 122),
+                 ("wrong-size", "north", "2", "Wrong size", 296, 128)],
+            )
+            connection.execute(
+                "INSERT INTO device_models(id, name, width, height, alignment_id, screen_type) "
+                "VALUES ('unsupported', 'Unsupported', 250, 122, 99, 99)"
+            )
+        valid = {
+            "controller_id": "north", "mac": "AA:BB:CC:DD:EE:01", "label": "Test",
+            "device_model_id": "2.13EPD-BWR", "width": 250, "height": 122,
+            "router_id": "north-router", "template_id": "north-template", "test_data": {},
+        }
+        self.service.create_staged_tag(valid)
+        cases = (
+            ({**valid, "mac": "aabb.ccdd.ee01"}, ConflictError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:02", "controller_id": "missing"}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:03", "device_model_id": "unknown"}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:0A", "device_model_id": "unsupported"}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:04", "height": 123}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:05", "router_id": "south-router"}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:06", "template_id": "south-template"}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:07", "template_id": "wrong-size"}, ValidationError),
+            ({**valid, "mac": "not-a-mac"}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:08", "test_data": []}, ValidationError),
+        )
+        for payload, error_type in cases:
+            with self.subTest(payload=payload), self.assertRaises(error_type):
+                self.service.create_staged_tag(payload)
+
+        second = {**valid, "mac": "AA:BB:CC:DD:EE:09"}
+        second_tag = self.service.create_staged_tag(second)
+        with self.assertRaises(ConflictError):
+            self.service.update_tag_configuration(second_tag["id"], {
+                **second, "mac": "aabb-ccdd-ee01",
+            })
+        with self.assertRaises(ValidationError):
+            self.service.update_tag_configuration(second_tag["id"], {
+                **second, "router_id": "south-router",
+            })
 
     def test_inventory_filters_dashboard_and_binding_lifecycle(self):
         bound = self.service.bind_tag("prod-tea", "tag-002")

@@ -361,7 +361,7 @@ class StorageTests(unittest.TestCase):
 
             storage.initialize()
             with closing(sqlite3.connect(database)) as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
                 self.assertIn("controller_id", [row[1] for row in connection.execute(
                     "PRAGMA table_info(routers)"
                 )])
@@ -407,7 +407,7 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertEqual(calls, 1)
             with closing(sqlite3.connect(database)) as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
 
     def test_versioned_migration_preserves_rows_and_scopes_vendor_identities(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -419,7 +419,7 @@ class StorageTests(unittest.TestCase):
             storage.initialize()
 
             with storage.connection() as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
                 self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
                 models = [tuple(row) for row in connection.execute(
                     "SELECT name, width, height, alignment_id, screen_type FROM device_models ORDER BY name"
@@ -451,6 +451,143 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual(storage.table_counts()["products"], before["products"])
             self.assertEqual(storage.table_counts()["tags"], before["tags"])
+
+    def test_v2_tag_configuration_migration_is_idempotent_and_preserves_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "v2-tags.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript(SCHEMA)
+                Storage._ensure_columns(connection, "templates", {
+                    "descriptor": "TEXT", "screen_type": "INTEGER",
+                    "background_id": "INTEGER", "vendor_updated_at": "TEXT",
+                    "style_fields": "TEXT NOT NULL DEFAULT '[]'", "rotate": "INTEGER",
+                    "user_id": "INTEGER",
+                })
+                Storage._ensure_columns(connection, "tags", {
+                    "show_style": "TEXT", "vendor_tag_id": "INTEGER",
+                    "router_status": "INTEGER", "sub": "INTEGER",
+                })
+                Storage._migrate_controller_scope(connection)
+                connection.execute("PRAGMA user_version = 2")
+                connection.execute(
+                    "INSERT INTO tags(id, controller_id, vendor_id, mac, width, height, "
+                    "battery, rssi, status) VALUES "
+                    "('kept', 'legacy', 'vendor-7', 'aa-bb-cc-dd-ee-ff', 296, 128, 80, -50, 'ready')"
+                )
+                connection.commit()
+
+            storage = Storage(database)
+            storage.initialize()
+            storage.initialize()
+
+            with storage.connection() as connection:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+                row = connection.execute(
+                    "SELECT id, mac, device_model_id, inventory_source, configuration_source, "
+                    "test_data FROM tags WHERE id = 'kept'"
+                ).fetchone()
+                self.assertEqual(tuple(row), (
+                    "kept", "AA:BB:CC:DD:EE:FF", "2.9EPD-BWR", "vendor", "vendor", "{}",
+                ))
+                self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_v2_normalized_mac_collision_rolls_back_schema_and_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "v2-mac-collision.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript(SCHEMA)
+                Storage._ensure_columns(connection, "templates", {
+                    "descriptor": "TEXT", "screen_type": "INTEGER",
+                    "background_id": "INTEGER", "vendor_updated_at": "TEXT",
+                    "style_fields": "TEXT NOT NULL DEFAULT '[]'", "rotate": "INTEGER",
+                    "user_id": "INTEGER",
+                })
+                Storage._ensure_columns(connection, "tags", {
+                    "show_style": "TEXT", "vendor_tag_id": "INTEGER",
+                    "router_status": "INTEGER", "sub": "INTEGER",
+                })
+                Storage._migrate_controller_scope(connection)
+                connection.execute("PRAGMA user_version = 2")
+                connection.executemany(
+                    "INSERT INTO tags(id, controller_id, vendor_id, mac, width, height, "
+                    "battery, rssi, status) VALUES (?, 'legacy', ?, ?, 296, 128, 80, -50, 'ready')",
+                    [("one", "one", "aa-bb-cc-dd-ee-ff"),
+                     ("two", "two", "AA:BB:CC:DD:EE:FF")],
+                )
+                connection.commit()
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                Storage(database).initialize()
+
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(tags)")}
+                self.assertNotIn("inventory_source", columns)
+                self.assertEqual(
+                    [row[0] for row in connection.execute("SELECT mac FROM tags ORDER BY id")],
+                    ["aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF"],
+                )
+
+    def test_v2_migration_preserves_unsupported_dimensions_without_assigning_a_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "v2-unsupported.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript(SCHEMA)
+                Storage._ensure_columns(connection, "templates", {
+                    "descriptor": "TEXT", "screen_type": "INTEGER",
+                    "background_id": "INTEGER", "vendor_updated_at": "TEXT",
+                    "style_fields": "TEXT NOT NULL DEFAULT '[]'", "rotate": "INTEGER",
+                    "user_id": "INTEGER",
+                })
+                Storage._ensure_columns(connection, "tags", {
+                    "show_style": "TEXT", "vendor_tag_id": "INTEGER",
+                    "router_status": "INTEGER", "sub": "INTEGER",
+                })
+                Storage._migrate_controller_scope(connection)
+                connection.execute("PRAGMA user_version = 2")
+                connection.execute(
+                    "INSERT INTO tags(id, controller_id, vendor_id, mac, width, height, "
+                    "battery, rssi, status) VALUES "
+                    "('old', 'legacy', 'old', 'AA:BB:CC:DD:EE:77', 400, 300, 80, -50, 'ready')"
+                )
+                connection.commit()
+
+            storage = Storage(database)
+            storage.initialize()
+            storage.initialize()
+            with storage.connection() as connection:
+                row = connection.execute(
+                    "SELECT width, height, device_model_id, inventory_source FROM tags "
+                    "WHERE id = 'old'"
+                ).fetchone()
+                self.assertEqual(tuple(row), (400, 300, None, "vendor"))
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+
+    def test_vendor_upsert_assigns_supported_device_model_without_overwriting_local_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Storage(Path(directory) / "vendor-model.db")
+            storage.initialize()
+            with storage.connection() as connection:
+                tag = {
+                    "id": "vendor-tag", "mac": "aa-bb-cc-dd-ee-10", "label": "Vendor",
+                    "width": 250, "height": 122, "battery": 80, "rssi": -50,
+                    "status": "ready", "router_id": None, "template_id": None,
+                    "last_seen_at": None, "vendor_tag_id": 10,
+                }
+                storage.upsert_tag(connection, tag)
+                connection.execute(
+                    "UPDATE tags SET configuration_source = 'local', test_data = ?, mac = ? "
+                    "WHERE mac = ?", ('{\"price\":\"1.00\"}', "AA:BB:CC:DD:EE:11",
+                                      "AA:BB:CC:DD:EE:10"),
+                )
+                storage.upsert_tag(connection, {**tag, "battery": 70, "rssi": -60})
+                row = connection.execute(
+                    "SELECT device_model_id, inventory_source, configuration_source, test_data, "
+                    "battery, rssi FROM tags WHERE mac = ?", ("AA:BB:CC:DD:EE:11",)
+                ).fetchone()
+                self.assertEqual(tuple(row), (
+                    "2.13EPD-BWR", "vendor", "local", '{"price":"1.00"}', 70, -60,
+                ))
 
     def test_schema_and_demo_seed_are_complete_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:

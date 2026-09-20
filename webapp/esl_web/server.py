@@ -341,6 +341,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 ))
             elif method == "POST" and path == "/api/products":
                 self._json(HTTPStatus.CREATED, service.create_product(self._body()))
+            elif method == "POST" and path == "/api/tags/staged":
+                self._json(HTTPStatus.CREATED, service.create_staged_tag(self._body()))
+            elif (method == "PUT" and path.startswith("/api/tags/")
+                  and path.endswith("/configuration")):
+                tag_id = unquote(
+                    path.removeprefix("/api/tags/").removesuffix("/configuration")
+                )
+                if not tag_id or "/" in tag_id:
+                    raise NotFoundError("Route not found")
+                self._json(
+                    HTTPStatus.OK, service.update_tag_configuration(tag_id, self._body())
+                )
             elif method in {"PUT", "PATCH"} and path.startswith("/api/products/"):
                 product_id = unquote(path.removeprefix("/api/products/"))
                 self._json(HTTPStatus.OK, service.update_product(product_id, self._body()))
@@ -432,6 +444,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                     bound=self._boolean(query, "bound"),
                 )
                 self._json(HTTPStatus.OK, {"items": items})
+            elif path.startswith("/api/tags/"):
+                tag_id = unquote(path.removeprefix("/api/tags/"))
+                if not tag_id or "/" in tag_id:
+                    raise NotFoundError("Route not found")
+                self._json(HTTPStatus.OK, service.get_tag(tag_id))
             elif path == "/api/routers":
                 self._json(HTTPStatus.OK, {"items": service.list_routers(status=self._single(query, "status"))})
             elif path == "/api/templates":

@@ -9,8 +9,13 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 LEGACY_CONTROLLER_ID = "legacy"
+SUPPORTED_DEVICE_MODELS = {
+    "2.13TFT-BW": (250, 132),
+    "2.13EPD-BWR": (250, 122),
+    "2.9EPD-BWR": (296, 128),
+}
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -180,8 +185,11 @@ class Storage:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version < SCHEMA_VERSION:
+                if version < 2:
                     self._migrate_controller_scope(connection)
+                if version < 3:
+                    self._migrate_tag_configuration(connection)
+                if version < SCHEMA_VERSION:
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 connection.commit()
             except Exception:
@@ -339,6 +347,42 @@ class Storage:
         Storage._execute_statements(connection, statements)
 
     @staticmethod
+    def _migrate_tag_configuration(connection: sqlite3.Connection) -> None:
+        """Add local tag configuration state while preserving vendor inventory."""
+        Storage._ensure_columns(connection, "tags", {
+            "inventory_source": "TEXT NOT NULL DEFAULT 'vendor'",
+            "configuration_source": "TEXT NOT NULL DEFAULT 'vendor'",
+            "test_data": "TEXT NOT NULL DEFAULT '{}'",
+        })
+        rows = connection.execute("SELECT id, controller_id, mac FROM tags").fetchall()
+        normalized: dict[tuple[str, str], str] = {}
+        for row in rows:
+            mac = Storage.normalized_mac(row["mac"])
+            key = (row["controller_id"], mac.casefold())
+            if key in normalized and normalized[key] != row["id"]:
+                raise sqlite3.IntegrityError("Normalized tag MAC collision")
+            normalized[key] = row["id"]
+            connection.execute("UPDATE tags SET mac = ? WHERE id = ?", (mac, row["id"]))
+        for model_id, (width, height) in SUPPORTED_DEVICE_MODELS.items():
+            connection.execute(
+                "UPDATE tags SET device_model_id = ? WHERE device_model_id IS NULL "
+                "AND width = ? AND height = ?", (model_id, width, height),
+            )
+
+    @staticmethod
+    def normalized_mac(value: str) -> str:
+        """Canonicalize standard 48-bit MACs and preserve opaque legacy vendor IDs."""
+        compact = value.strip()
+        for separator in (":", ".", "-"):
+            compact = compact.replace(separator, "")
+        if (len(compact) == 12
+                and all(character in "0123456789abcdefABCDEF" for character in compact)):
+            return ":".join(
+                compact[index:index + 2] for index in range(0, 12, 2)
+            ).upper()
+        return value
+
+    @staticmethod
     def _execute_statements(connection: sqlite3.Connection, statements: str) -> None:
         """Execute simple schema statements without executescript's implicit commit."""
         for statement in statements.split(";"):
@@ -364,10 +408,10 @@ class Storage:
              ("prod-coffee", "SKU-COFFEE", "8580000000011", "Káva", 6.49, "EUR", "tpl-default", "2026-01-01T09:00:00Z", "2026-01-01T09:00:00Z")),
             ("INSERT OR IGNORE INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
              ("prod-tea", "SKU-TEA", "8580000000028", "Čaj", 3.29, "EUR", "tpl-default", "2026-01-01T09:00:00Z", "2026-01-01T09:00:00Z")),
-            ("INSERT OR IGNORE INTO tags(id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-             ("tag-001", LEGACY_CONTROLLER_ID, "tag-001", "00:11:22:33:44:55", "Regál A", 296, 128, 88, -55, "ready", "router-main", "tpl-default", "2026-01-01T09:00:00Z")),
-            ("INSERT OR IGNORE INTO tags(id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status, router_id, template_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-             ("tag-002", LEGACY_CONTROLLER_ID, "tag-002", "00:11:22:33:44:66", "Regál B", 296, 128, 15, -82, "failed", "router-main", "tpl-default", "2026-01-01T08:55:00Z")),
+            ("INSERT OR IGNORE INTO tags(id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status, router_id, template_id, device_model_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             ("tag-001", LEGACY_CONTROLLER_ID, "tag-001", "00:11:22:33:44:55", "Regál A", 296, 128, 88, -55, "ready", "router-main", "tpl-default", "2.9EPD-BWR", "2026-01-01T09:00:00Z")),
+            ("INSERT OR IGNORE INTO tags(id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status, router_id, template_id, device_model_id, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             ("tag-002", LEGACY_CONTROLLER_ID, "tag-002", "00:11:22:33:44:66", "Regál B", 296, 128, 15, -82, "failed", "router-main", "tpl-default", "2.9EPD-BWR", "2026-01-01T08:55:00Z")),
             ("INSERT OR IGNORE INTO product_tags VALUES (?, ?, ?)",
              ("prod-coffee", "tag-001", "2026-01-01T09:00:00Z")),
             ("INSERT OR IGNORE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -526,9 +570,10 @@ class Storage:
         raw_vendor_id = tag.get("vendor_tag_id")
         positive_vendor_id = raw_vendor_id not in (None, "", 0, "0")
         base_vendor_id = str(raw_vendor_id) if positive_vendor_id else str(tag["id"])
+        mac = self.normalized_mac(tag["mac"])
         existing = connection.execute(
             "SELECT id, vendor_id FROM tags WHERE controller_id = ? AND mac = ?",
-            (controller_id, tag["mac"]),
+            (controller_id, mac),
         ).fetchone()
         if existing is not None:
             local_id, vendor_id = existing
@@ -571,18 +616,29 @@ class Storage:
                      if tag.get("router_id") is not None else None)
         template_id = (self.local_id(connection, "template", controller_id, tag["template_id"])
                        if tag.get("template_id") is not None else None)
+        device_model_id = next((
+            model_id for model_id, dimensions in SUPPORTED_DEVICE_MODELS.items()
+            if dimensions == (tag["width"], tag["height"])
+        ), None)
         connection.execute(
             "INSERT INTO tags(id, controller_id, vendor_id, mac, label, width, height, battery, rssi, status, router_id, template_id, "
-            "last_seen_at, show_style, vendor_tag_id, router_status, sub) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(controller_id, vendor_id) DO UPDATE SET mac=excluded.mac, label=excluded.label, width=excluded.width, "
-            "height=excluded.height, battery=excluded.battery, rssi=excluded.rssi, status=excluded.status, "
-            "router_id=excluded.router_id, template_id=excluded.template_id, last_seen_at=excluded.last_seen_at, "
-            "show_style=excluded.show_style, vendor_tag_id=excluded.vendor_tag_id, "
-            "router_status=excluded.router_status, sub=excluded.sub",
-            (local_id, controller_id, vendor_id, tag["mac"], tag["label"], tag["width"],
+            "device_model_id, last_seen_at, show_style, vendor_tag_id, router_status, sub) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(controller_id, vendor_id) DO UPDATE SET "
+            "mac=CASE WHEN tags.configuration_source = 'local' THEN tags.mac ELSE excluded.mac END, "
+            "label=CASE WHEN tags.configuration_source = 'local' THEN tags.label ELSE excluded.label END, "
+            "width=CASE WHEN tags.configuration_source = 'local' THEN tags.width ELSE excluded.width END, "
+            "height=CASE WHEN tags.configuration_source = 'local' THEN tags.height ELSE excluded.height END, "
+            "battery=excluded.battery, rssi=excluded.rssi, status=excluded.status, "
+            "router_id=CASE WHEN tags.configuration_source = 'local' THEN tags.router_id ELSE excluded.router_id END, "
+            "template_id=CASE WHEN tags.configuration_source = 'local' THEN tags.template_id ELSE excluded.template_id END, "
+            "device_model_id=CASE WHEN tags.configuration_source = 'local' THEN tags.device_model_id ELSE excluded.device_model_id END, "
+            "last_seen_at=excluded.last_seen_at, show_style=excluded.show_style, "
+            "vendor_tag_id=excluded.vendor_tag_id, router_status=excluded.router_status, "
+            "sub=excluded.sub, inventory_source='vendor'",
+            (local_id, controller_id, vendor_id, mac, tag["label"], tag["width"],
              tag["height"], tag["battery"], tag["rssi"], tag["status"], router_id, template_id,
-             tag["last_seen_at"], tag.get("show_style"), tag.get("vendor_tag_id"),
+             device_model_id, tag["last_seen_at"], tag.get("show_style"), tag.get("vendor_tag_id"),
              tag.get("router_status"), tag.get("sub")),
         )
 

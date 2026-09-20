@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from .storage import LEGACY_CONTROLLER_ID, Storage
+from .storage import LEGACY_CONTROLLER_ID, SUPPORTED_DEVICE_MODELS, Storage
 from .vendor import live_writes_authorized
 
 
@@ -87,9 +87,255 @@ class Service:
 
     PRODUCT_FIELDS = {"sku", "ean", "name", "price", "currency", "template_id"}
     CLONE_SOURCES = {145: 9, 147: 8, 149: 2}
+    TAG_CONFIGURATION_FIELDS = {
+        "controller_id", "mac", "label", "device_model_id", "width", "height",
+        "router_id", "template_id", "test_data",
+    }
+    TAG_DETAIL_SELECT = """
+        SELECT t.*, pt.product_id,
+               c.name AS controller_name, c.is_default AS controller_is_default,
+               r.name AS router_name, r.address AS router_address,
+               r.status AS router_status_name, r.last_seen_at AS router_last_seen_at,
+               dm.name AS model_name, dm.width AS model_width, dm.height AS model_height,
+               dm.alignment_id AS model_alignment_id, dm.screen_type AS model_screen_type,
+               tpl.name AS template_name, tpl.width AS template_width,
+               tpl.height AS template_height, tpl.mapping_type AS template_mapping_type,
+               tpl.style_fields AS template_style_fields,
+               tpl.controller_id AS template_controller_id
+          FROM tags t
+          LEFT JOIN product_tags pt ON pt.tag_id = t.id
+          JOIN controllers c ON c.id = t.controller_id
+          LEFT JOIN routers r ON r.id = t.router_id
+          LEFT JOIN device_models dm ON dm.id = t.device_model_id
+          LEFT JOIN templates tpl ON tpl.id = t.template_id
+    """
 
     def __init__(self, storage: Storage):
         self.storage = storage
+
+    @staticmethod
+    def _tag_result(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["controller"] = {
+            "id": item["controller_id"], "name": item.pop("controller_name"),
+            "is_default": bool(item.pop("controller_is_default")),
+        }
+        item["rf_router"] = None if item["router_id"] is None else {
+            "id": item["router_id"], "name": item.pop("router_name"),
+            "address": item.pop("router_address"), "status": item.pop("router_status_name"),
+            "last_seen_at": item.pop("router_last_seen_at"),
+        }
+        if item["router_id"] is None:
+            for field in ("router_name", "router_address", "router_status_name", "router_last_seen_at"):
+                item.pop(field)
+        model_fields = {
+            "name": item.pop("model_name"), "width": item.pop("model_width"),
+            "height": item.pop("model_height"),
+            "alignment_id": item.pop("model_alignment_id"),
+            "screen_type": item.pop("model_screen_type"),
+        }
+        expected_dimensions = SUPPORTED_DEVICE_MODELS.get(item["device_model_id"])
+        model_supported = (
+            expected_dimensions is not None
+            and expected_dimensions == (item["width"], item["height"])
+            and expected_dimensions == (model_fields["width"], model_fields["height"])
+        )
+        item["device_model"] = (
+            {"id": item["device_model_id"], **model_fields} if model_supported else None
+        )
+        item["device_model_state"] = "supported" if model_supported else "unsupported"
+        item["management_supported"] = model_supported
+
+        template_fields = {
+            "name": item.pop("template_name"), "width": item.pop("template_width"),
+            "height": item.pop("template_height"),
+            "mapping_type": item.pop("template_mapping_type"),
+        }
+        template_controller_id = item.pop("template_controller_id")
+        raw_style_fields = item.pop("template_style_fields")
+        template_compatible = (
+            item["template_id"] is not None and model_supported
+            and template_controller_id == item["controller_id"]
+            and (template_fields["width"], template_fields["height"])
+            == expected_dimensions
+        )
+        if template_compatible:
+            try:
+                style_fields = json.loads(raw_style_fields or "[]")
+            except json.JSONDecodeError as error:
+                raise IntegrationError("Stored tag configuration is invalid") from error
+            if (not isinstance(style_fields, list)
+                    or any(not isinstance(field, str) for field in style_fields)):
+                raise IntegrationError("Stored tag configuration is invalid")
+            item["compatible_template"] = {
+                "id": item["template_id"], **template_fields, "style_fields": style_fields,
+            }
+            item["template_compatibility"] = "compatible"
+        else:
+            item["compatible_template"] = None
+            item["template_compatibility"] = (
+                "unassigned" if item["template_id"] is None else "incompatible"
+            )
+        try:
+            test_data = json.loads(item.get("test_data") or "{}")
+        except json.JSONDecodeError as error:
+            raise IntegrationError("Stored tag configuration is invalid") from error
+        if not isinstance(test_data, dict):
+            raise IntegrationError("Stored tag configuration is invalid")
+        item["test_data"] = test_data
+        item["staged"] = item.get("inventory_source") == "local"
+        return item
+
+    @staticmethod
+    def _normalized_mac(value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValidationError("Invalid mac", details={"field": "mac"})
+        compact = re.sub(r"[:.\-]", "", value.strip())
+        if re.fullmatch(r"[0-9A-Fa-f]{12}", compact) is None:
+            raise ValidationError("Invalid mac", details={"field": "mac"})
+        return ":".join(compact[index:index + 2] for index in range(0, 12, 2)).upper()
+
+    @staticmethod
+    def _test_data(value: Any) -> str:
+        if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+            raise ValidationError("Invalid test_data", details={"field": "test_data"})
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise ValidationError("Invalid test_data", details={"field": "test_data"}) from error
+        if len(encoded.encode("utf-8")) > 65_536:
+            raise ValidationError("Invalid test_data", details={"field": "test_data"})
+        return encoded
+
+    @staticmethod
+    def _tag_dependencies(connection: sqlite3.Connection, data: dict[str, Any]) -> tuple[str, int, int, str, str]:
+        controller_id = _identifier(data.get("controller_id"), "controller_id")
+        if connection.execute(
+                "SELECT 1 FROM controllers WHERE id = ?", (controller_id,)
+        ).fetchone() is None:
+            raise ValidationError("Unknown controller_id", details={"field": "controller_id"})
+        model_id = _identifier(data.get("device_model_id"), "device_model_id")
+        if model_id not in SUPPORTED_DEVICE_MODELS:
+            raise ValidationError("Unsupported device_model_id",
+                                  details={"field": "device_model_id"})
+        model = connection.execute(
+            "SELECT width, height FROM device_models WHERE id = ?", (model_id,)
+        ).fetchone()
+        if model is None:
+            raise ValidationError("Unsupported device_model_id",
+                                  details={"field": "device_model_id"})
+        width, height = data.get("width"), data.get("height")
+        if (isinstance(width, bool) or isinstance(height, bool)
+                or not isinstance(width, int) or not isinstance(height, int)
+                or (width, height) != SUPPORTED_DEVICE_MODELS[model_id]
+                or tuple(model) != SUPPORTED_DEVICE_MODELS[model_id]):
+            raise ValidationError("Dimensions do not match device model",
+                                  details={"fields": ["width", "height"]})
+        router_id = _identifier(data.get("router_id"), "router_id")
+        if connection.execute(
+                "SELECT 1 FROM routers WHERE id = ? AND controller_id = ?",
+                (router_id, controller_id),
+        ).fetchone() is None:
+            raise ValidationError("Router does not belong to controller",
+                                  details={"field": "router_id"})
+        template_id = _identifier(data.get("template_id"), "template_id")
+        template = connection.execute(
+            "SELECT width, height FROM templates WHERE id = ? AND controller_id = ?",
+            (template_id, controller_id),
+        ).fetchone()
+        if template is None:
+            raise ValidationError("Template does not belong to controller",
+                                  details={"field": "template_id"})
+        if tuple(template) != (width, height):
+            raise ValidationError("Template dimensions do not match device model",
+                                  details={"field": "template_id"})
+        return controller_id, width, height, router_id, template_id
+
+    def create_staged_tag(self, data: Any) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ValidationError("JSON body must be an object")
+        unknown = set(data) - self.TAG_CONFIGURATION_FIELDS - {"id"}
+        if unknown:
+            raise ValidationError("Unknown tag fields", details={"fields": sorted(unknown)})
+        required = self.TAG_CONFIGURATION_FIELDS - {"label", "test_data"}
+        missing = sorted(required - set(data))
+        if missing:
+            raise ValidationError("Missing tag fields", details={"fields": missing})
+        tag_id = _identifier(data.get("id") or f"tag-{uuid.uuid4().hex[:12]}")
+        mac = self._normalized_mac(data.get("mac"))
+        label = _text(data.get("label"), "label", required=False)
+        test_data = self._test_data(data.get("test_data", {}))
+        try:
+            with self.storage.connection() as connection:
+                controller_id, width, height, router_id, template_id = self._tag_dependencies(
+                    connection, data
+                )
+                if connection.execute(
+                        "SELECT 1 FROM tags WHERE controller_id = ? AND UPPER(mac) = ?",
+                        (controller_id, mac),
+                ).fetchone() is not None:
+                    raise ConflictError("Tag MAC already exists on controller")
+                connection.execute(
+                    "INSERT INTO tags(id, controller_id, vendor_id, mac, label, width, height, "
+                    "battery, rssi, status, router_id, template_id, device_model_id, "
+                    "inventory_source, configuration_source, test_data) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 100, 0, 'ready', ?, ?, ?, 'local', 'local', ?)",
+                    (tag_id, controller_id, f"local:{tag_id}", mac, label, width, height,
+                     router_id, template_id, data["device_model_id"], test_data),
+                )
+                self._audit(connection, "tag.staged", "tag", tag_id, {
+                    "controller_id": controller_id, "mac": mac,
+                })
+        except sqlite3.IntegrityError as error:
+            raise ConflictError("Tag conflicts with an existing record") from error
+        return self.get_tag(tag_id)
+
+    def update_tag_configuration(self, tag_id: str, data: Any) -> dict[str, Any]:
+        tag_id = _identifier(tag_id, "tag_id")
+        if not isinstance(data, dict) or not data:
+            raise ValidationError("JSON body must be a non-empty object")
+        unknown = set(data) - self.TAG_CONFIGURATION_FIELDS
+        if unknown:
+            raise ValidationError("Unknown tag fields", details={"fields": sorted(unknown)})
+        required = self.TAG_CONFIGURATION_FIELDS - {"label", "test_data"}
+        missing = sorted(required - set(data))
+        if missing:
+            raise ValidationError("Missing tag fields", details={"fields": missing})
+        mac = self._normalized_mac(data.get("mac"))
+        label = _text(data.get("label"), "label", required=False)
+        test_data = self._test_data(data.get("test_data", {}))
+        try:
+            with self.storage.connection() as connection:
+                existing = connection.execute(
+                    "SELECT controller_id, inventory_source FROM tags WHERE id = ?", (tag_id,)
+                ).fetchone()
+                if existing is None:
+                    raise NotFoundError("Tag not found")
+                controller_id, width, height, router_id, template_id = self._tag_dependencies(
+                    connection, data
+                )
+                if controller_id != existing["controller_id"]:
+                    raise ValidationError("Tag controller cannot be changed",
+                                          details={"field": "controller_id"})
+                if connection.execute(
+                        "SELECT 1 FROM tags WHERE controller_id = ? AND UPPER(mac) = ? AND id <> ?",
+                        (controller_id, mac, tag_id),
+                ).fetchone() is not None:
+                    raise ConflictError("Tag MAC already exists on controller")
+                connection.execute(
+                    "UPDATE tags SET mac = ?, label = ?, width = ?, height = ?, router_id = ?, "
+                    "template_id = ?, device_model_id = ?, test_data = ?, "
+                    "configuration_source = 'local' WHERE id = ?",
+                    (mac, label, width, height, router_id, template_id,
+                     data["device_model_id"], test_data, tag_id),
+                )
+                self._audit(connection, "tag.configuration.updated", "tag", tag_id, {
+                    "controller_id": controller_id, "mac": mac,
+                    "inventory_source": existing["inventory_source"],
+                })
+        except sqlite3.IntegrityError as error:
+            raise ConflictError("Tag conflicts with an existing record") from error
+        return self.get_tag(tag_id)
 
     @staticmethod
     def _audit(connection: sqlite3.Connection, action: str, entity_type: str,
@@ -206,13 +452,13 @@ class Service:
     def get_tag(self, tag_id: str) -> dict[str, Any]:
         tag_id = _identifier(tag_id)
         with self.storage.connection() as connection:
-            result = _row(connection.execute(
-                "SELECT t.*, pt.product_id FROM tags t LEFT JOIN product_tags pt ON pt.tag_id = t.id WHERE t.id = ?",
+            row = connection.execute(
+                self.TAG_DETAIL_SELECT + " WHERE t.id = ?",
                 (tag_id,),
-            ).fetchone())
-        if result is None:
+            ).fetchone()
+        if row is None:
             raise NotFoundError("Tag not found")
-        return result
+        return self._tag_result(row)
 
     def list_tags(self, *, search: str | None = None, status: str | None = None,
                   router_id: str | None = None, bound: bool | None = None) -> list[dict[str, Any]]:
@@ -237,10 +483,11 @@ class Service:
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.storage.connection() as connection:
             rows = connection.execute(
-                "SELECT t.*, pt.product_id FROM tags t LEFT JOIN product_tags pt ON pt.tag_id = t.id"
+                self.TAG_DETAIL_SELECT
                 + where + " ORDER BY t.mac, t.id", values
             ).fetchall()
-        return [dict(row) for row in rows]
+        results = [self._tag_result(row) for row in rows]
+        return [item for item in results if item["management_supported"]]
 
     def list_routers(self, *, status: str | None = None) -> list[dict[str, Any]]:
         if status is not None and status not in {"online", "offline"}:

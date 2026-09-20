@@ -181,6 +181,181 @@ class ApiTests(unittest.TestCase):
             protected.server_close()
             thread.join(timeout=2)
 
+    def test_local_tag_staging_and_configuration_routes_never_call_vendor(self):
+        token = "B" * 64
+        vendor = Mock()
+        protected = create_server(
+            "127.0.0.1", 0, database_path=Path(self.temporary.name) / "local-tags.db",
+            seed=True, vendor_client=vendor, api_token=token,
+        )
+        with protected.service.storage.connection() as connection:
+            connection.execute(
+                "INSERT INTO controllers(id, name, is_default) VALUES ('south', 'South', 0)"
+            )
+            connection.execute(
+                "INSERT INTO routers(id, controller_id, vendor_id, name, address, status) "
+                "VALUES ('south-router', 'south', '1', 'South router', '10.0.1.1', 'online')"
+            )
+        thread = threading.Thread(target=protected.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{protected.server_port}"
+        payload = {
+            "id": "tag-local", "controller_id": "legacy", "mac": "aabb.ccdd.eeff",
+            "label": "Staged", "device_model_id": "2.9EPD-BWR", "width": 296,
+            "height": 128, "router_id": "router-main", "template_id": "tpl-default",
+            "test_data": {"name": "Local", "price": "1.00"},
+        }
+        try:
+            login = Request(base + "/api/session", data=json.dumps({"token": token}).encode(),
+                            method="POST", headers={"Content-Type": "application/json"})
+            with urlopen(login, timeout=2) as response:
+                cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+            headers = {"Content-Type": "application/json", "Cookie": cookie, "Origin": base}
+            create = Request(base + "/api/tags/staged", data=json.dumps(payload).encode(),
+                             method="POST", headers=headers)
+            with urlopen(create, timeout=2) as response:
+                self.assertEqual(response.status, 201)
+                created = json.loads(response.read())
+            self.assertTrue(created["staged"])
+            self.assertEqual(created["mac"], "AA:BB:CC:DD:EE:FF")
+
+            changed = {
+                **{key: value for key, value in payload.items() if key != "id"},
+                "label": "Configured", "test_data": {"price": "2.00"},
+            }
+            update = Request(base + "/api/tags/tag-local/configuration",
+                             data=json.dumps(changed).encode(), method="PUT", headers=headers)
+            with urlopen(update, timeout=2) as response:
+                self.assertEqual(response.status, 200)
+                configured = json.loads(response.read())
+            self.assertEqual(configured["label"], "Configured")
+            self.assertEqual(configured["configuration_source"], "local")
+
+            with urlopen(base + "/api/tags/tag-local", timeout=2) as response:
+                detail = json.loads(response.read())
+            self.assertEqual(detail["controller"]["id"], "legacy")
+            self.assertEqual(detail["rf_router"]["id"], "router-main")
+            self.assertEqual(detail["device_model"]["id"], "2.9EPD-BWR")
+            self.assertEqual(detail["compatible_template"]["id"], "tpl-default")
+            self.assertEqual(detail["test_data"], {"price": "2.00"})
+
+            duplicate = Request(
+                base + "/api/tags/staged",
+                data=json.dumps({**payload, "id": "tag-duplicate",
+                                 "mac": "AA-BB-CC-DD-EE-FF"}).encode(),
+                method="POST", headers=headers,
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(duplicate, timeout=2)
+            self.assertEqual(caught.exception.code, 409)
+            caught.exception.close()
+
+            cross_controller = Request(
+                base + "/api/tags/staged",
+                data=json.dumps({**payload, "id": "tag-cross",
+                                 "mac": "AA:BB:CC:DD:EE:01",
+                                 "router_id": "south-router"}).encode(),
+                method="POST", headers=headers,
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(cross_controller, timeout=2)
+            self.assertEqual(caught.exception.code, 400)
+            caught.exception.close()
+
+            second_payload = {**payload, "id": "tag-second", "mac": "AA:BB:CC:DD:EE:02"}
+            second_create = Request(
+                base + "/api/tags/staged", data=json.dumps(second_payload).encode(),
+                method="POST", headers=headers,
+            )
+            with urlopen(second_create, timeout=2) as response:
+                self.assertEqual(response.status, 201)
+            second_configuration = {
+                key: value for key, value in second_payload.items() if key != "id"
+            }
+            update_cases = (
+                ({**second_configuration, "height": 127}, 400),
+                ({**second_configuration, "mac": "aabb.ccdd.eeff"}, 409),
+                ({**second_configuration, "router_id": "south-router"}, 400),
+            )
+            for body, expected_status in update_cases:
+                request = Request(
+                    base + "/api/tags/tag-second/configuration",
+                    data=json.dumps(body).encode(), method="PUT", headers=headers,
+                )
+                with self.subTest(body=body), self.assertRaises(HTTPError) as caught:
+                    urlopen(request, timeout=2)
+                self.assertEqual(caught.exception.code, expected_status)
+                caught.exception.close()
+            vendor.assert_not_called()
+            self.assertEqual(vendor.mock_calls, [])
+        finally:
+            protected.shutdown()
+            protected.server_close()
+            thread.join(timeout=2)
+
+    def test_local_tag_mutations_reject_unauthenticated_and_cross_origin_requests(self):
+        token = "C" * 64
+        protected = create_server(
+            "127.0.0.1", 0, database_path=Path(self.temporary.name) / "protected-tags.db",
+            seed=True, api_token=token,
+        )
+        thread = threading.Thread(target=protected.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{protected.server_port}"
+        payload = {
+            "controller_id": "legacy", "mac": "AA:BB:CC:DD:EE:99", "label": "Test",
+            "device_model_id": "2.9EPD-BWR", "width": 296, "height": 128,
+            "router_id": "router-main", "template_id": "tpl-default", "test_data": {},
+        }
+        try:
+            unauthenticated = Request(
+                base + "/api/tags/staged", data=json.dumps(payload).encode(), method="POST",
+                headers={"Content-Type": "application/json", "Origin": base},
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(unauthenticated, timeout=2)
+            self.assertEqual(caught.exception.code, 401)
+            caught.exception.close()
+            unauthenticated_update = Request(
+                base + "/api/tags/tag-001/configuration",
+                data=json.dumps(payload).encode(), method="PUT",
+                headers={"Content-Type": "application/json", "Origin": base},
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(unauthenticated_update, timeout=2)
+            self.assertEqual(caught.exception.code, 401)
+            caught.exception.close()
+
+            login = Request(base + "/api/session", data=json.dumps({"token": token}).encode(),
+                            method="POST", headers={"Content-Type": "application/json"})
+            with urlopen(login, timeout=2) as response:
+                cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+            cross_origin = Request(
+                base + "/api/tags/staged", data=json.dumps(payload).encode(), method="POST",
+                headers={"Content-Type": "application/json", "Cookie": cookie,
+                         "Origin": "https://evil.example"},
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(cross_origin, timeout=2)
+            self.assertEqual(caught.exception.code, 403)
+            caught.exception.close()
+            cross_origin_update = Request(
+                base + "/api/tags/tag-001/configuration",
+                data=json.dumps(payload).encode(), method="PUT",
+                headers={"Content-Type": "application/json", "Cookie": cookie,
+                         "Origin": "https://evil.example"},
+            )
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(cross_origin_update, timeout=2)
+            self.assertEqual(caught.exception.code, 403)
+            caught.exception.close()
+            self.assertFalse(any(item["mac"] == payload["mac"]
+                                 for item in protected.service.list_tags()))
+        finally:
+            protected.shutdown()
+            protected.server_close()
+            thread.join(timeout=2)
+
     def test_template_clone_preflight_vendor_failure_is_mapped_to_502(self):
         vendor = Mock()
         vendor.get_style_catalog.side_effect = RuntimeError("vendor unavailable")
