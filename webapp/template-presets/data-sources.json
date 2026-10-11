@@ -1,0 +1,1463 @@
+{
+  "schema_version": 1,
+  "runtime_source": "document.sample_data",
+  "live_upstreams_connected": false,
+  "currency": "EUR",
+  "upstream_contracts": {
+    "erp": {
+      "title": "Katalóg ERP/POS",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "pim": {
+      "title": "Produktové dáta PIM",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "pricing": {
+      "title": "Výpočty jednotkovej ceny",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "campaign": {
+      "title": "Správa akcií",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "price_history": {
+      "title": "Overená história cien",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "crm": {
+      "title": "Vernostný program",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "scales": {
+      "title": "Katalóg váh a PLU",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "deposit": {
+      "title": "Pravidlá zálohovania",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "calculation": {
+      "title": "Výpočet platby",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "batch_system": {
+      "title": "Šarže a trvanlivosť",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    },
+    "wms": {
+      "title": "Sklad a vychystávanie",
+      "status": "not_connected",
+      "suggested_input": "CSV, JSON alebo API budúceho adaptéra; zatiaľ neimplementované"
+    }
+  },
+  "presets": {
+    "2.13TFT-BW-standard": {
+      "file": "retail-sk/2.13TFT-BW-standard.json",
+      "document_name": "2.13TFT-BW | Základná – cena a kód",
+      "model_id": "2.13TFT-BW",
+      "variant": "standard",
+      "title": "Základná cena a kód",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13TFT-BW-promotion": {
+      "file": "retail-sk/2.13TFT-BW-promotion.json",
+      "document_name": "2.13TFT-BW | Akcia – porovnanie ceny",
+      "model_id": "2.13TFT-BW",
+      "variant": "promotion",
+      "title": "Akcia a predchádzajúca cena",
+      "audience": "customer",
+      "bindings": {
+        "lowest_30d_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "price_history",
+          "upstream_connected": false,
+          "meaning": "Overené minimum z príslušnej cenovej histórie, nie svojvoľná porovnávacia cena."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "promotion_label": {
+          "runtime": "document.sample_data",
+          "upstream_source": "campaign",
+          "upstream_connected": false,
+          "meaning": "Označenie konkrétnej cenovej akcie."
+        },
+        "promotion_validity": {
+          "runtime": "document.sample_data",
+          "upstream_source": "campaign",
+          "upstream_connected": false,
+          "meaning": "Platnosť cenovej akcie, nie trvanlivosť produktu."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13TFT-BW-details": {
+      "file": "retail-sk/2.13TFT-BW-details.json",
+      "document_name": "2.13TFT-BW | Produkt – detaily cez QR",
+      "model_id": "2.13TFT-BW",
+      "variant": "details",
+      "title": "Produkt s QR",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "product_url": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Skutočný zákaznícky odkaz; example.com je len ukážka."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13TFT-BW-minimal": {
+      "file": "extended-sk/2.13TFT-BW-minimal.json",
+      "document_name": "SK · Čistá cena · 2.13TFT-BW",
+      "model_id": "2.13TFT-BW",
+      "variant": "minimal",
+      "title": "Čistá cena",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13TFT-BW-loyalty": {
+      "file": "extended-sk/2.13TFT-BW-loyalty.json",
+      "document_name": "SK · Klubová dvojcena · 2.13TFT-BW",
+      "model_id": "2.13TFT-BW",
+      "variant": "loyalty",
+      "title": "Klubová dvojcena",
+      "audience": "customer",
+      "bindings": {
+        "member_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "crm",
+          "upstream_connected": false,
+          "meaning": "Konečná cena pre oprávneného člena vernostného programu."
+        },
+        "member_unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Jednotková cena vypočítaná z klubovej ceny."
+        },
+        "membership_condition": {
+          "runtime": "document.sample_data",
+          "upstream_source": "crm",
+          "upstream_connected": false,
+          "meaning": "Zrozumiteľná podmienka klubovej ceny; bez osobných údajov."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "regular_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Bežná konečná cena; nie zákonná predchádzajúca cena."
+        },
+        "regular_unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Jednotková cena vypočítaná z bežnej ceny."
+        }
+      }
+    },
+    "2.13TFT-BW-weighed": {
+      "file": "extended-sk/2.13TFT-BW-weighed.json",
+      "document_name": "SK · Vážený predaj · 2.13TFT-BW",
+      "model_id": "2.13TFT-BW",
+      "variant": "weighed",
+      "title": "Vážený predaj",
+      "audience": "customer",
+      "bindings": {
+        "origin": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Overená krajina pôvodu."
+        },
+        "plu_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "scales",
+          "upstream_connected": false,
+          "meaning": "PLU z konkrétneho katalógu váh, nie SKU/EAN."
+        },
+        "price_per_kg": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Cena voľne váženého tovaru za 1 kg, nie cena balenia."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "quality_class": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Trieda kvality pre relevantný druh tovaru."
+        }
+      }
+    },
+    "2.13TFT-BW-deposit": {
+      "file": "extended-sk/2.13TFT-BW-deposit.json",
+      "document_name": "SK · Vratný obal · 2.13TFT-BW",
+      "model_id": "2.13TFT-BW",
+      "variant": "deposit",
+      "title": "Vratný obal",
+      "audience": "customer",
+      "bindings": {
+        "deposit_amount": {
+          "runtime": "document.sample_data",
+          "upstream_source": "deposit",
+          "upstream_connected": false,
+          "meaning": "Vratný záloh podľa druhu obalu; ukážka 0,15 EUR nie je univerzálne pravidlo."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "product_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Cena nápoja bez vratného zálohu."
+        },
+        "total_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "calculation",
+          "upstream_connected": false,
+          "meaning": "Celková platba = product_price + deposit_amount, presná desatinná aritmetika."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13TFT-BW-batch": {
+      "file": "extended-sk/2.13TFT-BW-batch.json",
+      "document_name": "SK · Šarža a trvanlivosť · 2.13TFT-BW",
+      "model_id": "2.13TFT-BW",
+      "variant": "batch",
+      "title": "Šarža a trvanlivosť",
+      "audience": "customer",
+      "bindings": {
+        "batch_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Identifikátor konkrétnej šarže predávaného tovaru."
+        },
+        "date_label": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Rozlišuje minimálnu trvanlivosť od spotrebujte do; nesmie sa svojvoľne zamieňať."
+        },
+        "expiry_date": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Dátum prislúchajúci šarži a druhu dátumu, nie globálny dátum celého SKU."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13TFT-BW-technical": {
+      "file": "extended-sk/2.13TFT-BW-technical.json",
+      "document_name": "SK · Technické parametre · 2.13TFT-BW",
+      "model_id": "2.13TFT-BW",
+      "variant": "technical",
+      "title": "Technické parametre",
+      "audience": "customer",
+      "bindings": {
+        "brand": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Výrobcom deklarovaná značka."
+        },
+        "model_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Kód modelu výrobcu, nie typ elektronickej cenovky."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "specs": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Krátke technické parametre."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        },
+        "warranty_text": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Deklarovaná záruka dodávateľa; nie právna interpretácia zodpovednosti za vady."
+        }
+      },
+      "image_asset": {
+        "runtime": "element.image_data",
+        "upstream_source": "pim",
+        "upstream_connected": false,
+        "sample": "Vlastné schematické monochromatické PNG, nie fotografia produktu."
+      }
+    },
+    "2.13TFT-BW-warehouse": {
+      "file": "extended-sk/2.13TFT-BW-warehouse.json",
+      "document_name": "SK · Sklad a vychystanie · 2.13TFT-BW",
+      "model_id": "2.13TFT-BW",
+      "variant": "warehouse",
+      "title": "Sklad a vychystanie",
+      "audience": "staff",
+      "bindings": {
+        "pick_location": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Pozícia pre vychystanie; demo A-03."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "replenishment_status": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Prevádzkový pokyn zo skladovej logiky, nie tvrdenie o čerstvosti."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "stock_qty": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Dostupné množstvo na uvedenej pozícii; nejde o zákaznícku cenu."
+        },
+        "stock_unit": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Jednotka skladového množstva."
+        }
+      }
+    },
+    "2.13EPD-BWR-standard": {
+      "file": "retail-sk/2.13EPD-BWR-standard.json",
+      "document_name": "2.13EPD-BWR | Základná – cena a kód",
+      "model_id": "2.13EPD-BWR",
+      "variant": "standard",
+      "title": "Základná cena a kód",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13EPD-BWR-promotion": {
+      "file": "retail-sk/2.13EPD-BWR-promotion.json",
+      "document_name": "2.13EPD-BWR | Akcia – porovnanie ceny",
+      "model_id": "2.13EPD-BWR",
+      "variant": "promotion",
+      "title": "Akcia a predchádzajúca cena",
+      "audience": "customer",
+      "bindings": {
+        "lowest_30d_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "price_history",
+          "upstream_connected": false,
+          "meaning": "Overené minimum z príslušnej cenovej histórie, nie svojvoľná porovnávacia cena."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "promotion_label": {
+          "runtime": "document.sample_data",
+          "upstream_source": "campaign",
+          "upstream_connected": false,
+          "meaning": "Označenie konkrétnej cenovej akcie."
+        },
+        "promotion_validity": {
+          "runtime": "document.sample_data",
+          "upstream_source": "campaign",
+          "upstream_connected": false,
+          "meaning": "Platnosť cenovej akcie, nie trvanlivosť produktu."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13EPD-BWR-details": {
+      "file": "retail-sk/2.13EPD-BWR-details.json",
+      "document_name": "2.13EPD-BWR | Produkt – detaily cez QR",
+      "model_id": "2.13EPD-BWR",
+      "variant": "details",
+      "title": "Produkt s QR",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "product_url": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Skutočný zákaznícky odkaz; example.com je len ukážka."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13EPD-BWR-minimal": {
+      "file": "extended-sk/2.13EPD-BWR-minimal.json",
+      "document_name": "SK · Čistá cena · 2.13EPD-BWR",
+      "model_id": "2.13EPD-BWR",
+      "variant": "minimal",
+      "title": "Čistá cena",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13EPD-BWR-loyalty": {
+      "file": "extended-sk/2.13EPD-BWR-loyalty.json",
+      "document_name": "SK · Klubová dvojcena · 2.13EPD-BWR",
+      "model_id": "2.13EPD-BWR",
+      "variant": "loyalty",
+      "title": "Klubová dvojcena",
+      "audience": "customer",
+      "bindings": {
+        "member_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "crm",
+          "upstream_connected": false,
+          "meaning": "Konečná cena pre oprávneného člena vernostného programu."
+        },
+        "member_unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Jednotková cena vypočítaná z klubovej ceny."
+        },
+        "membership_condition": {
+          "runtime": "document.sample_data",
+          "upstream_source": "crm",
+          "upstream_connected": false,
+          "meaning": "Zrozumiteľná podmienka klubovej ceny; bez osobných údajov."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "regular_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Bežná konečná cena; nie zákonná predchádzajúca cena."
+        },
+        "regular_unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Jednotková cena vypočítaná z bežnej ceny."
+        }
+      }
+    },
+    "2.13EPD-BWR-weighed": {
+      "file": "extended-sk/2.13EPD-BWR-weighed.json",
+      "document_name": "SK · Vážený predaj · 2.13EPD-BWR",
+      "model_id": "2.13EPD-BWR",
+      "variant": "weighed",
+      "title": "Vážený predaj",
+      "audience": "customer",
+      "bindings": {
+        "origin": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Overená krajina pôvodu."
+        },
+        "plu_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "scales",
+          "upstream_connected": false,
+          "meaning": "PLU z konkrétneho katalógu váh, nie SKU/EAN."
+        },
+        "price_per_kg": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Cena voľne váženého tovaru za 1 kg, nie cena balenia."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "quality_class": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Trieda kvality pre relevantný druh tovaru."
+        }
+      }
+    },
+    "2.13EPD-BWR-deposit": {
+      "file": "extended-sk/2.13EPD-BWR-deposit.json",
+      "document_name": "SK · Vratný obal · 2.13EPD-BWR",
+      "model_id": "2.13EPD-BWR",
+      "variant": "deposit",
+      "title": "Vratný obal",
+      "audience": "customer",
+      "bindings": {
+        "deposit_amount": {
+          "runtime": "document.sample_data",
+          "upstream_source": "deposit",
+          "upstream_connected": false,
+          "meaning": "Vratný záloh podľa druhu obalu; ukážka 0,15 EUR nie je univerzálne pravidlo."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "product_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Cena nápoja bez vratného zálohu."
+        },
+        "total_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "calculation",
+          "upstream_connected": false,
+          "meaning": "Celková platba = product_price + deposit_amount, presná desatinná aritmetika."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13EPD-BWR-batch": {
+      "file": "extended-sk/2.13EPD-BWR-batch.json",
+      "document_name": "SK · Šarža a trvanlivosť · 2.13EPD-BWR",
+      "model_id": "2.13EPD-BWR",
+      "variant": "batch",
+      "title": "Šarža a trvanlivosť",
+      "audience": "customer",
+      "bindings": {
+        "batch_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Identifikátor konkrétnej šarže predávaného tovaru."
+        },
+        "date_label": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Rozlišuje minimálnu trvanlivosť od spotrebujte do; nesmie sa svojvoľne zamieňať."
+        },
+        "expiry_date": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Dátum prislúchajúci šarži a druhu dátumu, nie globálny dátum celého SKU."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.13EPD-BWR-technical": {
+      "file": "extended-sk/2.13EPD-BWR-technical.json",
+      "document_name": "SK · Technické parametre · 2.13EPD-BWR",
+      "model_id": "2.13EPD-BWR",
+      "variant": "technical",
+      "title": "Technické parametre",
+      "audience": "customer",
+      "bindings": {
+        "brand": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Výrobcom deklarovaná značka."
+        },
+        "model_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Kód modelu výrobcu, nie typ elektronickej cenovky."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "specs": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Krátke technické parametre."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        },
+        "warranty_text": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Deklarovaná záruka dodávateľa; nie právna interpretácia zodpovednosti za vady."
+        }
+      },
+      "image_asset": {
+        "runtime": "element.image_data",
+        "upstream_source": "pim",
+        "upstream_connected": false,
+        "sample": "Vlastné schematické monochromatické PNG, nie fotografia produktu."
+      }
+    },
+    "2.13EPD-BWR-warehouse": {
+      "file": "extended-sk/2.13EPD-BWR-warehouse.json",
+      "document_name": "SK · Sklad a vychystanie · 2.13EPD-BWR",
+      "model_id": "2.13EPD-BWR",
+      "variant": "warehouse",
+      "title": "Sklad a vychystanie",
+      "audience": "staff",
+      "bindings": {
+        "pick_location": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Pozícia pre vychystanie; demo A-03."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "replenishment_status": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Prevádzkový pokyn zo skladovej logiky, nie tvrdenie o čerstvosti."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "stock_qty": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Dostupné množstvo na uvedenej pozícii; nejde o zákaznícku cenu."
+        },
+        "stock_unit": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Jednotka skladového množstva."
+        }
+      }
+    },
+    "2.9EPD-BWR-standard": {
+      "file": "retail-sk/2.9EPD-BWR-standard.json",
+      "document_name": "2.9EPD-BWR | Základná – cena a kód",
+      "model_id": "2.9EPD-BWR",
+      "variant": "standard",
+      "title": "Základná cena a kód",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.9EPD-BWR-promotion": {
+      "file": "retail-sk/2.9EPD-BWR-promotion.json",
+      "document_name": "2.9EPD-BWR | Akcia – porovnanie ceny",
+      "model_id": "2.9EPD-BWR",
+      "variant": "promotion",
+      "title": "Akcia a predchádzajúca cena",
+      "audience": "customer",
+      "bindings": {
+        "lowest_30d_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "price_history",
+          "upstream_connected": false,
+          "meaning": "Overené minimum z príslušnej cenovej histórie, nie svojvoľná porovnávacia cena."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "promotion_label": {
+          "runtime": "document.sample_data",
+          "upstream_source": "campaign",
+          "upstream_connected": false,
+          "meaning": "Označenie konkrétnej cenovej akcie."
+        },
+        "promotion_validity": {
+          "runtime": "document.sample_data",
+          "upstream_source": "campaign",
+          "upstream_connected": false,
+          "meaning": "Platnosť cenovej akcie, nie trvanlivosť produktu."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.9EPD-BWR-details": {
+      "file": "retail-sk/2.9EPD-BWR-details.json",
+      "document_name": "2.9EPD-BWR | Produkt – detaily cez QR",
+      "model_id": "2.9EPD-BWR",
+      "variant": "details",
+      "title": "Produkt s QR",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "product_url": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Skutočný zákaznícky odkaz; example.com je len ukážka."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.9EPD-BWR-minimal": {
+      "file": "extended-sk/2.9EPD-BWR-minimal.json",
+      "document_name": "SK · Čistá cena · 2.9EPD-BWR",
+      "model_id": "2.9EPD-BWR",
+      "variant": "minimal",
+      "title": "Čistá cena",
+      "audience": "customer",
+      "bindings": {
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.9EPD-BWR-loyalty": {
+      "file": "extended-sk/2.9EPD-BWR-loyalty.json",
+      "document_name": "SK · Klubová dvojcena · 2.9EPD-BWR",
+      "model_id": "2.9EPD-BWR",
+      "variant": "loyalty",
+      "title": "Klubová dvojcena",
+      "audience": "customer",
+      "bindings": {
+        "member_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "crm",
+          "upstream_connected": false,
+          "meaning": "Konečná cena pre oprávneného člena vernostného programu."
+        },
+        "member_unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Jednotková cena vypočítaná z klubovej ceny."
+        },
+        "membership_condition": {
+          "runtime": "document.sample_data",
+          "upstream_source": "crm",
+          "upstream_connected": false,
+          "meaning": "Zrozumiteľná podmienka klubovej ceny; bez osobných údajov."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "regular_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Bežná konečná cena; nie zákonná predchádzajúca cena."
+        },
+        "regular_unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Jednotková cena vypočítaná z bežnej ceny."
+        }
+      }
+    },
+    "2.9EPD-BWR-weighed": {
+      "file": "extended-sk/2.9EPD-BWR-weighed.json",
+      "document_name": "SK · Vážený predaj · 2.9EPD-BWR",
+      "model_id": "2.9EPD-BWR",
+      "variant": "weighed",
+      "title": "Vážený predaj",
+      "audience": "customer",
+      "bindings": {
+        "origin": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Overená krajina pôvodu."
+        },
+        "plu_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "scales",
+          "upstream_connected": false,
+          "meaning": "PLU z konkrétneho katalógu váh, nie SKU/EAN."
+        },
+        "price_per_kg": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Cena voľne váženého tovaru za 1 kg, nie cena balenia."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "quality_class": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Trieda kvality pre relevantný druh tovaru."
+        }
+      }
+    },
+    "2.9EPD-BWR-deposit": {
+      "file": "extended-sk/2.9EPD-BWR-deposit.json",
+      "document_name": "SK · Vratný obal · 2.9EPD-BWR",
+      "model_id": "2.9EPD-BWR",
+      "variant": "deposit",
+      "title": "Vratný obal",
+      "audience": "customer",
+      "bindings": {
+        "deposit_amount": {
+          "runtime": "document.sample_data",
+          "upstream_source": "deposit",
+          "upstream_connected": false,
+          "meaning": "Vratný záloh podľa druhu obalu; ukážka 0,15 EUR nie je univerzálne pravidlo."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "product_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Cena nápoja bez vratného zálohu."
+        },
+        "total_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "calculation",
+          "upstream_connected": false,
+          "meaning": "Celková platba = product_price + deposit_amount, presná desatinná aritmetika."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.9EPD-BWR-batch": {
+      "file": "extended-sk/2.9EPD-BWR-batch.json",
+      "document_name": "SK · Šarža a trvanlivosť · 2.9EPD-BWR",
+      "model_id": "2.9EPD-BWR",
+      "variant": "batch",
+      "title": "Šarža a trvanlivosť",
+      "audience": "customer",
+      "bindings": {
+        "batch_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Identifikátor konkrétnej šarže predávaného tovaru."
+        },
+        "date_label": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Rozlišuje minimálnu trvanlivosť od spotrebujte do; nesmie sa svojvoľne zamieňať."
+        },
+        "expiry_date": {
+          "runtime": "document.sample_data",
+          "upstream_source": "batch_system",
+          "upstream_connected": false,
+          "meaning": "Dátum prislúchajúci šarži a druhu dátumu, nie globálny dátum celého SKU."
+        },
+        "package_info": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Balenie, čisté množstvo alebo pôvod podľa variantu."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        }
+      }
+    },
+    "2.9EPD-BWR-technical": {
+      "file": "extended-sk/2.9EPD-BWR-technical.json",
+      "document_name": "SK · Technické parametre · 2.9EPD-BWR",
+      "model_id": "2.9EPD-BWR",
+      "variant": "technical",
+      "title": "Technické parametre",
+      "audience": "customer",
+      "bindings": {
+        "brand": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Výrobcom deklarovaná značka."
+        },
+        "model_code": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Kód modelu výrobcu, nie typ elektronickej cenovky."
+        },
+        "price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Aktuálna konečná cena výrobku s DPH v EUR, bez zálohu."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "specs": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Krátke technické parametre."
+        },
+        "unit_price": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pricing",
+          "upstream_connected": false,
+          "meaning": "Cena výrobku za kg/l/ks bez zálohu; závisí od čistého množstva."
+        },
+        "warranty_text": {
+          "runtime": "document.sample_data",
+          "upstream_source": "pim",
+          "upstream_connected": false,
+          "meaning": "Deklarovaná záruka dodávateľa; nie právna interpretácia zodpovednosti za vady."
+        }
+      },
+      "image_asset": {
+        "runtime": "element.image_data",
+        "upstream_source": "pim",
+        "upstream_connected": false,
+        "sample": "Vlastné schematické monochromatické PNG, nie fotografia produktu."
+      }
+    },
+    "2.9EPD-BWR-warehouse": {
+      "file": "extended-sk/2.9EPD-BWR-warehouse.json",
+      "document_name": "SK · Sklad a vychystanie · 2.9EPD-BWR",
+      "model_id": "2.9EPD-BWR",
+      "variant": "warehouse",
+      "title": "Sklad a vychystanie",
+      "audience": "staff",
+      "bindings": {
+        "pick_location": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Pozícia pre vychystanie; demo A-03."
+        },
+        "product_name": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Zákaznícky názov výrobku; návrh mapovania local.products.name."
+        },
+        "replenishment_status": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Prevádzkový pokyn zo skladovej logiky, nie tvrdenie o čerstvosti."
+        },
+        "sku": {
+          "runtime": "document.sample_data",
+          "upstream_source": "erp",
+          "upstream_connected": false,
+          "meaning": "Interný identifikátor; Code128 nie je pokladničný EAN-13."
+        },
+        "stock_qty": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Dostupné množstvo na uvedenej pozícii; nejde o zákaznícku cenu."
+        },
+        "stock_unit": {
+          "runtime": "document.sample_data",
+          "upstream_source": "wms",
+          "upstream_connected": false,
+          "meaning": "Jednotka skladového množstva."
+        }
+      }
+    }
+  }
+}

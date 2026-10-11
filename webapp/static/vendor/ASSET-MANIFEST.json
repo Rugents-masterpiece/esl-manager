@@ -1,0 +1,26 @@
+[
+  {
+    "file": "JsBarcode.LICENSE",
+    "url": "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/MIT-LICENSE.txt",
+    "bytes": 1083,
+    "sha256": "e34674e4ef4ed987f7a21a3040a1bdce83f08cc07eedfacbba1ffe53b0633734"
+  },
+  {
+    "file": "qrcode.js",
+    "url": "https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js",
+    "bytes": 56694,
+    "sha256": "18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780"
+  },
+  {
+    "file": "qrcode_UTF8.js",
+    "url": "https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode_UTF8.js",
+    "bytes": 793,
+    "sha256": "e522d64003b332e29271fdce4993ed3ae2934c8947f41654bd324ddcfa2de301"
+  },
+  {
+    "file": "JsBarcode.code128.min.js",
+    "url": "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/barcodes/JsBarcode.code128.min.js",
+    "bytes": 27834,
+    "sha256": "fce0a5e6129fde04b2e5f8a503b32a3d6d4b0116263c5369336ecccad57bf334"
+  }
+]

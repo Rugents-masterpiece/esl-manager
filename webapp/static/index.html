@@ -13,6 +13,13 @@
   <script src="/static/dialog-operation-guard.js" defer></script>
   <script src="/static/template-family.js" defer></script>
   <script src="/static/template-preview.js" defer></script>
+  <link rel="stylesheet" href="/static/designer.css">
+  <script src="/static/vendor/JsBarcode.code128.min.js" defer></script>
+  <script src="/static/vendor/qrcode.js" defer></script>
+  <script src="/static/vendor/qrcode_UTF8.js" defer></script>
+  <script src="/static/designer-model.js" defer></script>
+  <script src="/static/designer-media.js" defer></script>
+  <script src="/static/designer.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -32,6 +39,7 @@
       <nav>
         <a href="#tags" data-view="tags" aria-current="page"><span aria-hidden="true">▤</span>Cenovky</a>
         <a href="#templates" data-view="templates"><span aria-hidden="true">▣</span>Šablóny</a>
+        <a href="#designer" data-view="designer"><span aria-hidden="true">✎</span>Editor šablón</a>
         <a href="#controllers" data-view="controllers"><span aria-hidden="true">⌁</span>Controllery</a>
       </nav>
       <nav class="secondary-nav" aria-label="Sekundárna navigácia">
@@ -64,6 +72,12 @@
         <div id="templates-grid" class="card-grid"></div>
       </section>
 
+      <section id="view-designer" class="view" data-view-panel="designer" aria-labelledby="designer-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">VLASTNÉ LOKÁLNE NÁVRHY</p><h1 id="designer-title">Editor šablón</h1><p>Navrhnite cenovku z textov, tvarov, obrázkov a kódov alebo načítajte lokálnu kópiu šablóny zo zariadenia.</p></div><span class="badge">LOKÁLNY NÁVRH</span></div>
+        <div class="designer-notice"><strong>Lokálny návrh — bez odoslania na cenovku.</strong><details><summary>Rozdiel oproti šablóne na controlleri</summary><p>Návrhy nie sú vendor šablóny a nemožno ich priradiť fyzickej cenovke. Náhľad používa písma prehliadača a je iba aproximácia. Import a export JSON pracujú s lokálnym formátom tohto editora.</p></details></div>
+        <div id="designer-root"></div>
+      </section>
+
       <section id="view-controllers" class="view" data-view-panel="controllers" aria-labelledby="controllers-title" hidden>
         <div class="page-heading"><div><p class="eyebrow">INFRAŠTRUKTÚRA</p><h1 id="controllers-title">Controllery</h1><p>Verejné pripojenia a rozsah lokálneho inventára. Prihlasovacie údaje sa nezobrazujú.</p></div></div>
         <div id="controllers-state" class="state-message" role="status">Načítavam controllery…</div>
@@ -88,11 +102,12 @@
       <div class="form-grid">
         <div class="field"><label for="detail-controller">Controller</label><select id="detail-controller" disabled></select></div>
         <div class="field"><label for="detail-router">RF router</label><select id="detail-router" required></select></div>
-        <div class="field"><label for="detail-model">Model</label><select id="detail-model" required></select></div>
+        <div class="field"><label for="detail-model">Displej — pevný rozmer</label><select id="detail-model" disabled aria-describedby="detail-display-note"></select><small id="detail-display-note">Rozmer a typ displeja sú vlastnosťou cenovky a nemožno ich zmeniť.</small></div>
         <div class="field"><label for="detail-template">Šablóna</label><select id="detail-template" required></select></div>
         <div class="field"><label for="detail-mac">MAC</label><input id="detail-mac" required maxlength="32"></div>
         <div class="field"><label for="detail-label">Označenie</label><input id="detail-label" maxlength="200"></div>
-        <div class="field field-full"><label for="tag-test-data">Testovacie dáta JSON</label><textarea id="tag-test-data" rows="8" spellcheck="false" required></textarea></div>
+        <div class="field field-full"><h3>Obsah displeja</h3><p>Polia podľa vybranej publikovanej šablóny. Názvy polí zodpovedajú jej dátovým väzbám.</p><div id="tag-content-fields" class="form-grid"></div></div>
+        <details class="field field-full"><summary>Rozšírené nastavenia — dáta JSON</summary><label for="tag-test-data">Obsah cenovky (JSON)</label><textarea id="tag-test-data" rows="8" spellcheck="false" required></textarea></details>
       </div>
       <div class="modal-actions"><button class="button button-secondary dialog-close" type="button">Zavrieť</button><button id="save-tag-detail" class="button button-primary" type="submit">Uložiť lokálnu konfiguráciu</button></div>
     </form>

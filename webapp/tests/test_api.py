@@ -246,6 +246,10 @@ class ApiTests(unittest.TestCase):
             seed=True, vendor_client=vendor, api_token=token,
         )
         with protected.service.storage.connection() as connection:
+            # Supply the exact EPD type absent from the legacy demo seed.
+            connection.execute(
+                "UPDATE templates SET screen_type = 2 WHERE id = 'tpl-default'"
+            )
             connection.execute(
                 "INSERT INTO controllers(id, name, is_default) VALUES ('south', 'South', 0)"
             )

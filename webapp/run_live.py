@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import os
@@ -9,9 +10,11 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from esl_web import vendor
 from esl_web.controllers import CONTROLLER_ID_PATTERN, ControllerRegistry
 from esl_web.server import create_server, is_valid_api_token
-from esl_web.vendor import validate_base_url
+from esl_web.service import ForbiddenError
+from esl_web.vendor import VendorClient, validate_base_url
 
 ROOT = Path(__file__).resolve().parent
 CREDENTIALS = ROOT / "data" / "live-credentials.json"
@@ -101,10 +104,81 @@ def _validate_controller(settings: dict[str, Any]) -> None:
             raise ValueError(f"{field} must be a positive number")
 
 
-def main() -> None:
+class TemplateReadOnlyClient:
+    """Expose template/image reads only, independent of physical-write flags."""
+
+    _READ_METHODS = frozenset({
+        'get_style_catalog', 'get_style_detail', 'get_style_layout',
+        'get_photos', 'get_photo_data',
+    })
+
+    def __init__(self, client):
+        self._client = client
+
+    def __getattr__(self, name):
+        if name not in self._READ_METHODS:
+            raise ForbiddenError('Controller access is restricted to reading templates and their images')
+        return getattr(self._client, name)
+
+
+class TemplatePublishClient:
+    """Expose native publishing, with separately opted-in confirmed dispatch."""
+
+    template_publish_scope = True
+
+    _METHODS = frozenset({
+        'get_style_catalog', 'get_style_detail', 'get_style_layout', 'get_style_data',
+        'get_template_preview', 'get_photos', 'get_photo_data', 'get_tag_display',
+        'create_style', 'add_style_field', 'rename_style', 'save_style_layout', 'upload_photo',
+    })
+
+    def __init__(self, client, *, allow_confirmed_dispatch: bool = False):
+        self._client = client
+        self.allow_confirmed_dispatch = allow_confirmed_dispatch
+
+    def _update_screen(self, updates: list[dict[str, Any]], confirmation: str) -> list[dict[str, Any]]:
+        if not self.allow_confirmed_dispatch or not vendor.live_writes_authorized(confirmation):
+            raise ForbiddenError('Live ESL dispatch is disabled or not explicitly confirmed')
+        # The real VendorClient independently checks authorization again.
+        return self._client.update_screen(updates, confirmation)
+
+    def __getattr__(self, name):
+        if self.allow_confirmed_dispatch:
+            if name == 'get_tags':
+                return self._client.get_tags
+            if name == 'update_screen':
+                return self._update_screen
+        if name not in self._METHODS:
+            raise ForbiddenError('Controller access is restricted to template publishing and image access')
+        return getattr(self._client, name)
+
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--templates-only', action='store_true',
+                       help='Allow only template/image reads; force physical writes off')
+    modes.add_argument('--template-publish', action='store_true',
+                       help='Allow native template publishing and template/image reads; physical writes off by default')
+    parser.add_argument('--allow-confirmed-dispatch', action='store_true',
+                        help='With --template-publish only, allow explicitly confirmed physical dispatch')
+    args = parser.parse_args(argv)
+    if args.allow_confirmed_dispatch and not args.template_publish:
+        parser.error('--allow-confirmed-dispatch requires --template-publish')
     settings = load_settings(CREDENTIALS)
-    registry = ControllerRegistry.from_settings(settings)
-    os.environ["ESL_LIVE_WRITES"] = "1" if settings.get("live_writes") is True else "0"
+    if args.templates_only:
+        factory = lambda config: TemplateReadOnlyClient(VendorClient(config))
+    elif args.template_publish:
+        factory = lambda config: TemplatePublishClient(
+            VendorClient(config), allow_confirmed_dispatch=args.allow_confirmed_dispatch)
+    else:
+        factory = VendorClient
+    os.environ["ESL_LIVE_WRITES"] = (
+        "1" if args.allow_confirmed_dispatch or (
+            settings.get("live_writes") is True
+            and not (args.templates_only or args.template_publish)) else "0"
+    )
+    registry = ControllerRegistry.from_settings(settings, client_factory=factory)
     server = create_server(
         "0.0.0.0",
         10050,

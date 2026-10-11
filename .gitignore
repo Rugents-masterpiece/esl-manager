@@ -10,3 +10,5 @@ webapp/data/
 webapp/*.db
 .coverage
 webapp/test-artifacts/
+.env
+.env.*

@@ -280,6 +280,11 @@ class ServiceTests(unittest.TestCase):
         self.storage = Storage(Path(self.temporary.name) / "esl.db")
         self.storage.initialize()
         self.storage.seed_demo()
+        # The legacy demo seed omits type; these fixtures model a known EPD template.
+        with self.storage.connection() as connection:
+            connection.execute(
+                "UPDATE templates SET screen_type = 2 WHERE id = 'tpl-default'"
+            )
         self.service = Service(self.storage)
 
     def tearDown(self):
@@ -374,8 +379,8 @@ class ServiceTests(unittest.TestCase):
                 "INSERT INTO controllers(id, name, is_default) VALUES ('south', 'South', 0)"
             )
             connection.execute(
-                "INSERT INTO templates(id, controller_id, vendor_id, name, width, height) "
-                "VALUES ('south-template', 'south', '1', 'South template', 296, 128)"
+                "INSERT INTO templates(id, controller_id, vendor_id, name, width, height, screen_type) "
+                "VALUES ('south-template', 'south', '1', 'South template', 296, 128, 2)"
             )
             connection.execute(
                 "UPDATE tags SET device_model_id = '2.9EPD-BWR', "
@@ -439,11 +444,13 @@ class ServiceTests(unittest.TestCase):
                  ("south-router", "south", "1", "South router", "10.0.1.1")],
             )
             connection.executemany(
-                "INSERT INTO templates(id, controller_id, vendor_id, name, width, height) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                [("north-template", "north", "1", "North template", 250, 122),
-                 ("south-template", "south", "1", "South template", 250, 122),
-                 ("wrong-size", "north", "2", "Wrong size", 296, 128)],
+                "INSERT INTO templates(id, controller_id, vendor_id, name, width, height, screen_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [("north-template", "north", "1", "North template", 250, 122, 2),
+                 ("south-template", "south", "1", "South template", 250, 122, 2),
+                 ("wrong-size", "north", "2", "Wrong size", 296, 128, 2),
+                 ("wrong-type", "north", "3", "Wrong type", 250, 122, 1),
+                 ("missing-type", "north", "4", "Missing type", 250, 122, None)],
             )
             connection.execute(
                 "INSERT INTO device_models(id, name, width, height, alignment_id, screen_type) "
@@ -464,6 +471,8 @@ class ServiceTests(unittest.TestCase):
             ({**valid, "mac": "AA:BB:CC:DD:EE:05", "router_id": "south-router"}, ValidationError),
             ({**valid, "mac": "AA:BB:CC:DD:EE:06", "template_id": "south-template"}, ValidationError),
             ({**valid, "mac": "AA:BB:CC:DD:EE:07", "template_id": "wrong-size"}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:0B", "template_id": "wrong-type"}, ValidationError),
+            ({**valid, "mac": "AA:BB:CC:DD:EE:0C", "template_id": "missing-type"}, ValidationError),
             ({**valid, "mac": "not-a-mac"}, ValidationError),
             ({**valid, "mac": "AA:BB:CC:DD:EE:08", "test_data": []}, ValidationError),
         )

@@ -236,6 +236,7 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
     expected_updates = []
     tag_status = 1
     updated_tag_status = 4
+    native_timestamp = 1000
     login_authenticated = True
 
     def log_message(self, format, *args):
@@ -278,12 +279,17 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
             if self.headers.get("Cookie") != "JSESSIONID=fake-login":
                 self.send_error(401)
                 return
-            if json.loads(body) != self.__class__.expected_updates:
+            payload = json.loads(body)
+            expected = [{k: v for k, v in item.items() if k != 'ABDisplayFlag'}
+                        for item in self.__class__.expected_updates]
+            if not isinstance(payload, list) or payload != expected:
                 self.send_error(400)
                 return
             if self.__class__.update_status == 500:
                 self.send_error(500)
                 return
+            if self.__class__.tag_status != self.__class__.updated_tag_status:
+                self.__class__.native_timestamp += 1000
             self.__class__.tag_status = self.__class__.updated_tag_status
             self._send("true")
             return
@@ -304,7 +310,13 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
         if self.headers.get("Cookie") != "JSESSIONID=fake-login":
             self.send_error(401)
             return
-        if self.path == "/esls_new/mms/queryRouters?currentPage=0&routerId=0":
+        if self.path == "/esls_new/tag/getTagById?id=7":
+            self._send(json.dumps({"tag": {"id": 7, "mac": "92.91.87.80",
+                                         "width": 296, "height": 128, "styleid": 98,
+                                         "updateProgress": 5, "updatetime": 1000,
+                                         "tagAndGood": {"status": self.__class__.tag_status,
+                                                        "timestamp": self.__class__.native_timestamp}}}))
+        elif self.path == "/esls_new/mms/queryRouters?currentPage=0&routerId=0":
             self._send(json.dumps({"datalist": [{
                 "id": "98", "mac": "1", "ip": "127.0.0.8", "state": "true",
                 "shopName": "Test shop", "description": "Test router",
@@ -329,7 +341,7 @@ class FakeVendorHandler(BaseHTTPRequestHandler):
         elif self.path == "/esls_new/associate/getTagsMsg":
             self._send(json.dumps([{
                 "mac": "92.91.87.80", "power": 99, "routerid": "1", "rssi": -48,
-                "showStyle": "2.9 inch", "status": 1, "styleId": 136,
+                "showStyle": "2.9 inch", "status": self.__class__.tag_status, "styleId": 136,
                 "width": 296, "height": 128, "routerStatus": 1, "ido": 7, "sub": 0,
             }]))
         elif self.path == "/esls_new/associate/getStyleMsgs":
@@ -577,9 +589,11 @@ class ReadOnlySyncTests(unittest.TestCase):
              "/esls_new/mms/queryRouters?currentPage=0&routerId=0",
              "/esls_new/mms/queryTags?currentPage=1&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
              "/esls_new/mms/queryTags?currentPage=2&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+             "/esls_new/tag/getTagById?id=7",
              "/esls_new/associate/updateScreen",
              "/esls_new/mms/queryTags?currentPage=1&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
-             "/esls_new/mms/queryTags?currentPage=2&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0"],
+             "/esls_new/mms/queryTags?currentPage=2&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+             "/esls_new/tag/getTagById?id=7"],
         )
 
     def test_dispatch_rejects_stale_success_status_as_unverified(self):
@@ -615,6 +629,7 @@ class ReadOnlySyncTests(unittest.TestCase):
              "/esls_new/mms/queryRouters?currentPage=0&routerId=0",
              "/esls_new/mms/queryTags?currentPage=1&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
              "/esls_new/mms/queryTags?currentPage=2&tagMac=0&routerMac=0&startTime=&endTime=&templateType=0",
+             "/esls_new/tag/getTagById?id=7",
              "/esls_new/associate/updateScreen"],
         )
 

@@ -106,6 +106,7 @@ class Service:
                dm.alignment_id AS model_alignment_id, dm.screen_type AS model_screen_type,
                tpl.name AS template_name, tpl.width AS template_width,
                tpl.height AS template_height, tpl.mapping_type AS template_mapping_type,
+               tpl.screen_type AS template_screen_type,
                tpl.style_fields AS template_style_fields,
                tpl.controller_id AS template_controller_id
           FROM tags t
@@ -156,6 +157,7 @@ class Service:
             "name": item.pop("template_name"), "width": item.pop("template_width"),
             "height": item.pop("template_height"),
             "mapping_type": item.pop("template_mapping_type"),
+            "screen_type": item.pop("template_screen_type"),
         }
         template_controller_id = item.pop("template_controller_id")
         raw_style_fields = item.pop("template_style_fields")
@@ -164,6 +166,7 @@ class Service:
             and template_controller_id == item["controller_id"]
             and (template_fields["width"], template_fields["height"])
             == expected_dimensions
+            and template_fields["screen_type"] == model_fields["screen_type"]
         )
         if template_compatible:
             try:
@@ -196,6 +199,14 @@ class Service:
     def _normalized_mac(value: Any) -> str:
         if not isinstance(value, str):
             raise ValidationError("Invalid mac", details={"field": "mac"})
+        text = value.strip()
+        if len(text.split(".")) == 4:
+            if re.fullmatch(r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}", text) is None:
+                raise ValidationError("Invalid mac", details={"field": "mac"})
+            try:
+                return Service._vendor_tag_identity(text)
+            except IntegrationError as error:
+                raise ValidationError("Invalid mac", details={"field": "mac"}) from error
         compact = re.sub(r"[:.\-]", "", value.strip())
         if re.fullmatch(r"[0-9A-Fa-f]{12}", compact) is None:
             raise ValidationError("Invalid mac", details={"field": "mac"})
@@ -225,7 +236,7 @@ class Service:
             raise ValidationError("Unsupported device_model_id",
                                   details={"field": "device_model_id"})
         model = connection.execute(
-            "SELECT width, height FROM device_models WHERE id = ?", (model_id,)
+            "SELECT width, height, screen_type FROM device_models WHERE id = ?", (model_id,)
         ).fetchone()
         if model is None:
             raise ValidationError("Unsupported device_model_id",
@@ -234,7 +245,7 @@ class Service:
         if (isinstance(width, bool) or isinstance(height, bool)
                 or not isinstance(width, int) or not isinstance(height, int)
                 or (width, height) != SUPPORTED_DEVICE_MODELS[model_id]
-                or tuple(model) != SUPPORTED_DEVICE_MODELS[model_id]):
+                or (model["width"], model["height"]) != SUPPORTED_DEVICE_MODELS[model_id]):
             raise ValidationError("Dimensions do not match device model",
                                   details={"fields": ["width", "height"]})
         router_id = _identifier(data.get("router_id"), "router_id")
@@ -246,14 +257,14 @@ class Service:
                                   details={"field": "router_id"})
         template_id = _identifier(data.get("template_id"), "template_id")
         template = connection.execute(
-            "SELECT width, height FROM templates WHERE id = ? AND controller_id = ?",
+            "SELECT width, height, screen_type FROM templates WHERE id = ? AND controller_id = ?",
             (template_id, controller_id),
         ).fetchone()
         if template is None:
             raise ValidationError("Template does not belong to controller",
                                   details={"field": "template_id"})
-        if tuple(template) != (width, height):
-            raise ValidationError("Template dimensions do not match device model",
+        if tuple(template) != (width, height, model["screen_type"]):
+            raise ValidationError("Template dimensions or screen type do not match device model",
                                   details={"field": "template_id"})
         return controller_id, width, height, router_id, template_id
 
@@ -323,6 +334,15 @@ class Service:
                     raise ValidationError(
                         "Unsupported historical tag configuration cannot be changed",
                         details={"field": "device_model_id"},
+                    )
+                immutable_fields = [
+                    field for field in ("device_model_id", "width", "height")
+                    if data[field] != existing[field]
+                ]
+                if immutable_fields:
+                    raise ValidationError(
+                        "Tag display family cannot be changed",
+                        details={"fields": immutable_fields},
                     )
                 controller_id, width, height, router_id, template_id = self._tag_dependencies(
                     connection, data
@@ -975,7 +995,9 @@ class Service:
         template_id = None if template_value in (None, "", 0, "0") else self._vendor_id(template_value, "styleId")
         if template_id not in template_ids:
             template_id = None
-        if "updateProgress" in item:
+        if "_native_update_progress" in item:
+            status_field = "_native_update_progress"
+        elif "updateProgress" in item:
             status_field = "updateProgress"
         elif "status" in item:
             status_field = "status"
@@ -1076,6 +1098,32 @@ class Service:
         if not isinstance(items, list):
             raise IntegrationError("Vendor style catalog returned invalid data")
         return [self._normalize_vendor_style(item, controller_id=controller_id) for item in items]
+
+    def refresh_template_catalog(self, client: Any,
+                                 controller_id: str = LEGACY_CONTROLLER_ID) -> dict[str, Any]:
+        """Register a validated native catalog locally without touching tag inventory."""
+        controller_id = _identifier(controller_id, "controller_id")
+        try:
+            items = client.get_style_catalog()
+        except Exception as error:
+            raise IntegrationError("Vendor style catalog failed") from error
+        if not isinstance(items, list):
+            raise IntegrationError("Vendor style catalog returned invalid data")
+        normalized = [self._normalize_vendor_style(item, detail=True,
+                      controller_id=controller_id) for item in items]
+        self._index_vendor_items(normalized, "id", "style catalog")
+        with self.storage.connection() as connection:
+            if connection.execute("SELECT 1 FROM controllers WHERE id = ?",
+                                  (controller_id,)).fetchone() is None:
+                raise ValidationError("Unknown controller_id", details={"field": "controller_id"})
+            for item in items:
+                self.upsert_vendor_template(connection, item, controller_id=controller_id)
+            self._audit(connection, "vendor.templates.refreshed", "controller", controller_id,
+                        {"controller_id": controller_id, "templates": len(items)})
+        vendor_ids = {item["id"] for item in normalized}
+        registered = [item for item in self.list_templates()
+                      if item["controller_id"] == controller_id and item["vendor_id"] in vendor_ids]
+        return {"items": registered, "synced": {"templates": len(registered)}}
 
     @staticmethod
     def _clone_catalog(client: Any) -> list[dict[str, Any]]:
@@ -1810,10 +1858,13 @@ class Service:
                         raise IntegrationError(f"Vendor tag field conflicts: {field}")
             if extended.get("width") is None or extended.get("height") is None:
                 raise IntegrationError("Vendor extended tag dimensions are missing")
-            merged_tags.append({
+            merged = {
                 **extended, **item, "mac": key,
                 "width": extended["width"], "height": extended["height"],
-            })
+            }
+            if "status" in extended:
+                merged["_native_update_progress"] = extended["status"]
+            merged_tags.append(merged)
         tags = merged_tags
         with self.storage.connection() as connection:
             for item in routers:
@@ -1859,9 +1910,9 @@ class Service:
         for update in updates:
             if not isinstance(update, dict):
                 raise ValidationError("Each update must be an object", details={"field": "updates"})
-            required = {"mac", "styleid", "mappingtype", "ABDisplayFlag"}
+            required = {"mac", "styleid", "mappingtype"}
             if not required.issubset(update):
-                raise ValidationError("Each update requires mac, styleid, mappingtype and ABDisplayFlag")
+                raise ValidationError("Each update requires mac, styleid and mappingtype")
             if any(not isinstance(key, str) or len(key) > 200 for key in update):
                 raise ValidationError("Invalid update field name")
             mac = _text(update["mac"], "mac")
@@ -1872,10 +1923,11 @@ class Service:
             try:
                 self._vendor_integer(update, "styleid", minimum=0)
                 self._vendor_integer(update, "mappingtype", minimum=0)
-                display_flag = self._vendor_integer(update, "ABDisplayFlag")
+                display_flag = (self._vendor_integer(update, "ABDisplayFlag")
+                                if "ABDisplayFlag" in update else None)
             except IntegrationError as error:
                 raise ValidationError(error.message) from error
-            if display_flag not in {161, 162, 163}:
+            if display_flag is not None and display_flag not in {161, 162, 163}:
                 raise ValidationError("Invalid ABDisplayFlag", details={"field": "ABDisplayFlag"})
         try:
             verified = client.update_screen(updates, confirmation)

@@ -14,14 +14,17 @@ import re
 import secrets
 import threading
 import time
+from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from .controllers import CONTROLLER_ID_PATTERN, ControllerRegistry
+from .drafts import DraftService
+from .template_apply import TemplatePublicationService
 from .service import (
     ForbiddenError,
     IntegrationError,
@@ -32,7 +35,7 @@ from .service import (
     ValidationError,
 )
 from .storage import LEGACY_CONTROLLER_ID, Storage
-from .vendor import VendorClient, VendorConfig, VendorConfigurationError, live_writes_authorized
+from .vendor import VendorClient, VendorConfig, VendorConfigurationError, VendorError, live_writes_authorized
 
 
 API_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{64}")
@@ -66,6 +69,9 @@ class EslHTTPServer(ThreadingHTTPServer):
             raise ValueError("API token must be a 64-character URL-safe token")
         if vendor_client is not None and controller_registry is not None:
             raise ValueError("vendor_client and controller_registry are mutually exclusive")
+        self._drafts: DraftService | None = None
+        self._publications: TemplatePublicationService | None = None
+        self._draft_lock = threading.Lock()
         super().__init__(address, handler)
         self.service = service
         self.controller_registry = controller_registry
@@ -82,6 +88,24 @@ class EslHTTPServer(ThreadingHTTPServer):
         self.sessions: dict[str, float] = {}
         self.session_lock = threading.Lock()
         self.static_root = (static_root or Path(__file__).resolve().parent.parent / "static").resolve()
+
+    @property
+    def drafts(self) -> DraftService:
+        """Initialize additive draft storage only when a draft route is used."""
+        with self._draft_lock:
+            if self._drafts is None:
+                drafts = DraftService(self.service.storage)
+                drafts.initialize()
+                self._drafts = drafts
+            return self._drafts
+
+    @property
+    def publications(self) -> TemplatePublicationService:
+        with self._draft_lock:
+            if self._publications is None:
+                self._publications = TemplatePublicationService(self.service.storage)
+                self._publications.initialize()
+            return self._publications
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -334,7 +358,38 @@ class ApiHandler(BaseHTTPRequestHandler):
             elif not _is_loopback_address(self.client_address[0]):
                 self.close_connection = True
                 raise ForbiddenError("API mutations are restricted to the local host")
-            if method == "POST" and path == "/api/sync/read-only":
+            if path == "/api/template-drafts" or path.startswith("/api/template-drafts/"):
+                if query:
+                    raise ValidationError("Template drafts do not accept query parameters")
+                if path == "/api/template-drafts" and method == "POST":
+                    self._json(HTTPStatus.CREATED, server.drafts.create(self._body()))
+                elif path.startswith("/api/template-drafts/") and method in {"PUT", "DELETE"}:
+                    draft_id = unquote(path.removeprefix("/api/template-drafts/"))
+                    if not draft_id or "/" in draft_id:
+                        raise NotFoundError("Route not found")
+                    if method == "PUT":
+                        self._json(HTTPStatus.OK, server.drafts.update(draft_id, self._body()))
+                    else:
+                        server.drafts.delete(draft_id, self._body())
+                        self._no_content()
+                else:
+                    raise NotFoundError("Route not found")
+            elif (method == "POST" and path.startswith("/api/tags/")
+                  and path.endswith("/apply-template")):
+                if query:
+                    raise ValidationError("Apply route does not accept query parameters")
+                data = self._body()
+                if not live_writes_authorized(data.get('confirmation') if isinstance(data, dict) else None):
+                    raise ForbiddenError("Live ESL writes require explicit confirmation")
+                tag_id = unquote(path.removeprefix('/api/tags/').removesuffix('/apply-template'))
+                if not tag_id or '/' in tag_id:
+                    raise NotFoundError("Route not found")
+                tag = service.get_tag(tag_id)
+                client, controller_id = self._required_vendor_target(server, {'controller_id': [tag['controller_id']]})
+                result = server.publications.apply(service, client, controller_id, tag_id, data)
+                verified = result['verified_tags'][0]
+                self._json(HTTPStatus.OK, {**result, 'verified': True, 'status': verified['status']})
+            elif method == "POST" and path == "/api/sync/read-only":
                 if self._body() != {}:
                     raise ValidationError("Read-only sync body must be an empty object")
                 client, controller_id = self._vendor_target(server, query)
@@ -360,6 +415,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     ),
                 )
             elif method == "POST" and path == "/api/dispatch/live":
+                if getattr(type(server.vendor_client), 'template_publish_scope', False):
+                    raise ForbiddenError("Template manager permits only model-checked single-tag application")
                 if os.environ.get("ESL_LIVE_WRITES") != "1":
                     self.close_connection = True
                     raise ForbiddenError("Live ESL writes are disabled or not explicitly confirmed")
@@ -460,7 +517,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                     raise NotFoundError("Route not found")
             elif path == "/api/health":
                 if os.environ.get("ESL_LIVE_WRITES") == "1":
-                    mode = "live"
+                    mode = "live_enabled" if getattr(
+                        type(server.vendor_client), 'template_publish_scope', False
+                    ) else "live"
                 else:
                     mode = "read_only" if server.vendor_client is not None else "simulation"
                 self._json(HTTPStatus.OK, {"mode": mode, "status": "ok"})
@@ -490,6 +549,29 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "default": bool(row["is_default"]),
                 } for row in stored if row["id"] not in configured_ids)
                 self._json(HTTPStatus.OK, {"items": controllers})
+            elif path == "/api/template-draft-sources" or path.startswith("/api/template-draft-sources/"):
+                # Import lazily: ordinary routes must not initialize draft storage
+                # or contact a controller. Source GETs never access SQLite.
+                from .draft_import import DraftImportService
+                source_id = None
+                if path != "/api/template-draft-sources":
+                    source_id = unquote(path.removeprefix("/api/template-draft-sources/"))
+                    if not source_id or "/" in source_id:
+                        raise NotFoundError("Route not found")
+                client, controller_id = self._vendor_target(server, query)
+                importer = DraftImportService(client, controller_id)
+                result = importer.catalog() if source_id is None else importer.convert(source_id)
+                self._json(HTTPStatus.OK, result)
+            elif path == "/api/template-drafts" or path.startswith("/api/template-drafts/"):
+                if query:
+                    raise ValidationError("Template drafts do not accept query parameters")
+                if path == "/api/template-drafts":
+                    self._json(HTTPStatus.OK, {"items": server.drafts.list()})
+                else:
+                    draft_id = unquote(path.removeprefix("/api/template-drafts/"))
+                    if not draft_id or "/" in draft_id:
+                        raise NotFoundError("Route not found")
+                    self._json(HTTPStatus.OK, server.drafts.get(draft_id))
             elif path == "/api/products":
                 items = service.list_products(
                     search=self._single(query, "search"), tag_id=self._single(query, "tag_id")
@@ -510,6 +592,29 @@ class ApiHandler(BaseHTTPRequestHandler):
                     include_unsupported=self._boolean(query, "include_unsupported") or False,
                 )
                 self._json(HTTPStatus.OK, {"items": items})
+            elif path.startswith('/api/tags/') and path.endswith('/display'):
+                if query:
+                    raise ValidationError('Display route does not accept query parameters')
+                tag_id = unquote(path.removeprefix('/api/tags/').removesuffix('/display'))
+                if not tag_id or '/' in tag_id:
+                    raise NotFoundError('Route not found')
+                tag = service.get_tag(tag_id)
+                if tag.get('staged'):
+                    raise ValidationError('Staged tags do not have a physical display')
+                if server.controller_registry is None:
+                    if tag['controller_id'] != server.controller_id:
+                        raise ValidationError('Tag controller is not configured')
+                    target_query = {}
+                else:
+                    target_query = {'controller_id': [tag['controller_id']]}
+                client, controller_id = self._required_vendor_target(server, target_query)
+                try:
+                    display = client.get_tag_display(tag['mac'])
+                except VendorError as error:
+                    raise IntegrationError('Controller display metadata could not be read') from error
+                self._json(HTTPStatus.OK, {**display, 'tag_id': tag_id, 'controller_id': controller_id,
+                    'read_at': datetime.now(timezone.utc).isoformat(),
+                    'preview_url': (f"/api/vendor/templates/{display['style_id']}/preview" + ('?' + urlencode({'controller_id': controller_id}) if server.controller_registry is not None else '')) if display['style_id'] else None})
             elif path.startswith("/api/tags/"):
                 tag_id = unquote(path.removeprefix("/api/tags/"))
                 if not tag_id or "/" in tag_id:
@@ -519,6 +624,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"items": service.list_routers(status=self._single(query, "status"))})
             elif path == "/api/templates":
                 self._json(HTTPStatus.OK, {"items": service.list_templates(search=self._single(query, "search"))})
+            elif path == "/api/template-publications":
+                if set(query) - {'controller_id'}:
+                    raise ValidationError("Publications accept only controller_id")
+                items = server.publications.list(self._single(query, 'controller_id'))
+                self._json(HTTPStatus.OK, {'items': [{**item, 'model_id': item['document']['model_id']} for item in items]})
             elif path == "/api/vendor/templates":
                 client, _controller_id = self._required_vendor_target(server, query)
                 self._json(HTTPStatus.OK, {

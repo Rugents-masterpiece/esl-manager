@@ -313,6 +313,53 @@ class VendorClient:
                     tags.append(item)
         raise VendorError("Vendor tag pagination exceeded 100 pages")
 
+    def get_tag_display(self, mac: str) -> dict[str, Any]:
+        """Read controller metadata, never claim a physical screen read-back."""
+        from .service import Service, IntegrationError
+        try:
+            identity = Service._vendor_tag_identity(mac)
+            indexed = Service._index_vendor_tags(self.get_tags(), 'display tags')
+            row = indexed.get(identity)
+            if row is None:
+                raise VendorError('Controller did not find the requested tag')
+            raw_id = row.get('id')
+            if isinstance(raw_id, bool) or re.fullmatch(r'[1-9][0-9]{0,9}', str(raw_id)) is None:
+                raise VendorError('Invalid controller tag id')
+            tag_id = self._style_id(int(str(raw_id)))
+            value = self._request_document('GET', f'/tag/getTagById?id={tag_id}')
+            tag = value.get('tag') if isinstance(value, dict) else None
+            if (not isinstance(tag, dict) or tag.get('id') != tag_id
+                    or Service._vendor_tag_identity(tag.get('mac')) != identity):
+                raise VendorError('Controller tag detail identity differs')
+            width, height = tag.get('width'), tag.get('height')
+            if any(type(n) is not int or not 1 <= n <= 1024 for n in (width, height)):
+                raise VendorError('Invalid controller display dimensions')
+            style_id = tag.get('styleid')
+            if style_id in (None, 0):
+                style_id = None
+            else:
+                style_id = self._style_id(style_id)
+            updated = tag.get('updatetime')
+            if updated is not None and (type(updated) is not int or not 0 <= updated <= 8640000000000000):
+                raise VendorError('Invalid controller display timestamp')
+            native = tag.get('tagAndGood')
+            if native is not None and not isinstance(native, dict):
+                raise VendorError('Invalid controller native transmission metadata')
+            native = native or {}
+            native_updated = native.get('timestamp')
+            if native_updated is not None and (type(native_updated) is not int
+                    or not 0 <= native_updated <= 8640000000000000):
+                raise VendorError('Invalid controller native transmission timestamp')
+            return {'mac': identity, 'vendor_tag_id': tag_id, 'width': width, 'height': height,
+                    'style_id': style_id, 'update_progress': self._update_status(tag),
+                    'updated_at_ms': updated, 'physical_screen_verified': False,
+                    'native_update_progress': self._update_status({'status': native.get('status')}),
+                    'native_updated_at_ms': native_updated,
+                    'native_update_source': 'tag.tagAndGood',
+                    'image_source': 'controller_template_preview'}
+        except IntegrationError as error:
+            raise VendorError('Invalid controller tag identity') from error
+
     @staticmethod
     def _documented_collection(value: Any, resource: str) -> list[dict[str, Any]]:
         if not isinstance(value, dict) or value.get("resultCode") != 10:
@@ -472,6 +519,58 @@ class VendorClient:
         value = self._request_document("GET", "/associate/getPhotos")
         return self._documented_collection(value, "photos")
 
+    def upload_photo(self, name: str, data: bytes, width: int, height: int) -> dict[str, Any]:
+        """Create a named PNG once; reconcile the exact target after any outcome."""
+        if (not isinstance(name, str)
+                or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,95}', name) is None
+                or not isinstance(data, bytes)
+                or type(width) is not int or type(height) is not int
+                or not 1 <= width <= 1024 or not 1 <= height <= 1024):
+            raise VendorError('Invalid native photo upload')
+        from .drafts import _png
+        try:
+            _png('data:image/png;base64,' + base64.b64encode(data).decode('ascii'))
+        except Exception as error:
+            raise VendorError('Invalid native photo PNG') from error
+        if (int.from_bytes(data[16:20], 'big'), int.from_bytes(data[20:24], 'big')) != (width, height):
+            raise VendorError('Native photo dimensions disagree')
+
+        def verify(rows):
+            targets = [row for row in rows if row.get('name') == name]
+            if len(targets) != 1 or (targets[0].get('width'), targets[0].get('height')) != (width, height):
+                raise VendorError('Native photo metadata could not be verified')
+            actual, media_type = self.get_photo_data(name)
+            if actual != data or media_type != 'image/png':
+                raise VendorError('Native photo content could not be verified')
+            return {'name': name, 'width': width, 'height': height,
+                    'content_exact': True, 'sha256': hashlib.sha256(actual).hexdigest()}
+
+        with self._request_lock:
+            before = self.get_photos()
+            if any(row.get('name') == name for row in before):
+                return verify(before)
+            boundary = 'esl-' + os.urandom(24).hex()
+            parts = []
+            for field, value in (('name', name), ('width', str(width)), ('height', str(height))):
+                parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"'
+                              f'\r\n\r\n{value}\r\n').encode('ascii'))
+            parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; '
+                          f'filename="{name}.png"\r\nContent-Type: image/png\r\n\r\n').encode('ascii'))
+            parts.append(data)
+            # Match the native form: the optional red-plane file part exists
+            # even when no file is selected. Some legacy handlers dereference it.
+            parts.append((f'\r\n--{boundary}\r\nContent-Disposition: form-data; '
+                          'name="redphoto"; filename=""\r\n'
+                          'Content-Type: application/octet-stream\r\n\r\n').encode('ascii'))
+            parts.append(f'\r\n--{boundary}--\r\n'.encode('ascii'))
+            try:
+                self._request_document('POST', '/style/uploadPhoto', b''.join(parts),
+                                       f'multipart/form-data; boundary={boundary}')
+            except VendorError:
+                # A timeout or error may follow a successful mutation; do not retry.
+                pass
+            return verify(self.get_photos())
+
     def get_photo_data(self, photo_name: str) -> tuple[bytes, str]:
         name = self._resource_name(photo_name, "photo name")
         value = self._request_document(
@@ -511,36 +610,59 @@ class VendorClient:
         return data, detected_type
 
     def update_screen(self, updates: list[dict[str, Any]], confirmation: str) -> list[dict[str, Any]]:
-        """Dispatch updates only when double-gated, then confirm status by read-back."""
+        """Send the native array once; verify fresh native transmission, not MMS assignment."""
         if not live_writes_authorized(confirmation):
             raise LiveWritesDisabled("Live ESL writes are disabled or not explicitly confirmed")
-        requested_macs = {item.get("mac") for item in updates}
-        before_by_mac = {item.get("mac"): item for item in self.get_tags()}
-        if any(mac not in before_by_mac for mac in requested_macs):
-            raise VendorError("Vendor preflight could not find every requested tag")
-        before_status = {
-            mac: self._update_status(before_by_mac[mac]) for mac in requested_macs
-        }
-        if any(status is None for status in before_status.values()):
-            raise VendorError("Vendor preflight returned an invalid tag status")
-        body = json.dumps(updates, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        # Import lazily: the service imports the write gate from this module.
+        from .service import IntegrationError, Service
+
+        try:
+            requested_macs = {
+                Service._vendor_tag_identity(item.get("mac")) for item in updates
+            }
+            if len(requested_macs) != len(updates):
+                raise VendorError("Duplicate requested vendor tag identity")
+        except IntegrationError as error:
+            raise VendorError("Vendor preflight returned invalid tag identities") from error
+        before_by_mac = {mac: self.get_tag_display(mac) for mac in sorted(requested_macs)}
+        for mac, tag in before_by_mac.items():
+            if (tag.get('mac') != mac or type(tag.get('native_update_progress')) is not int
+                    or tag['native_update_progress'] not in {0, 1, 3, 4, 5}):
+                raise VendorError("Vendor preflight returned an invalid or already-updating native tag status")
+            timestamp = tag.get('native_updated_at_ms')
+            if type(timestamp) is not int or not 0 <= timestamp <= 8640000000000000:
+                raise VendorError("Vendor preflight returned an invalid native transmission timestamp")
+        # Captured modern component.js emits an array without ABDisplayFlag.
+        # Legacy A/B flags and JSON-string wrapping can be accepted but ignored.
+        wire_updates = [{key: value for key, value in item.items() if key != 'ABDisplayFlag'}
+                        for item in updates]
+        body = json.dumps(wire_updates, ensure_ascii=False, separators=(",", ":"),
+                          allow_nan=False).encode("utf-8")
+        # Recheck the process gate immediately before the only physical mutation.
+        if not live_writes_authorized(confirmation):
+            raise LiveWritesDisabled("Live ESL writes are disabled or not explicitly confirmed")
         accepted = self._request("POST", "/associate/updateScreen", body, "application/json")
         if accepted is not True:
             raise VendorError("Vendor did not accept the display update")
-        tags_by_mac = {item.get("mac"): item for item in self.get_tags()}
         verified = []
-        for mac in requested_macs:
-            tag = tags_by_mac.get(mac)
-            if tag is None:
-                raise VendorError(f"Vendor read-back did not confirm tag {mac}")
-            current_status = self._update_status(tag)
-            if current_status not in {2, 4} or current_status == before_status[mac]:
+        for mac in sorted(requested_macs):
+            tag = self.get_tag_display(mac)
+            before = before_by_mac[mac]
+            current_status = tag.get('native_update_progress')
+            timestamp = tag.get('native_updated_at_ms')
+            previous_timestamp = before.get('native_updated_at_ms')
+            fresh_timestamp = (type(timestamp) is int and type(previous_timestamp) is int
+                               and 0 <= timestamp <= 8640000000000000
+                               and timestamp > previous_timestamp)
+            if (tag.get('mac') != mac or type(current_status) is not int
+                    or current_status not in {2, 4}
+                    or not fresh_timestamp):
                 raise VendorError(f"Vendor read-back did not confirm tag {mac}")
             verified.append({
                 **tag,
                 "_verified_status": "updating" if current_status == 2 else "success",
             })
-        return sorted(verified, key=lambda item: str(item.get("mac")))
+        return verified
 
     @staticmethod
     def _update_status(item: dict[str, Any] | None) -> int | None:

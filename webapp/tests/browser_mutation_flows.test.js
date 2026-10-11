@@ -172,6 +172,11 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await installDelayedMutation();
   await pointerClick('document.querySelector(".tag-row")');
   await waitFor(`byId("detail-id").value !== ""`);
+  assert.equal(await evaluate(`byId("detail-model").disabled && byId("detail-model").options.length === 1`), true,
+    "existing tag display is immutable, not a selectable model");
+  assert.equal(await evaluate(`byId("detail-model").options[0].textContent.includes("296 × 128 px")`), true);
+  assert.equal(await evaluate(`focusManager.openers.get(byId("tag-drawer")) === document.querySelector(".tag-row")`), true,
+    "detail inventory/publication refresh must preserve the connected opener row");
   assert.equal(await evaluate(`byId("tag-drawer").contains(document.activeElement)`), true);
   await pointerClick('byId("save-tag-detail")');
   await waitFor(`typeof window.__releaseMutation === "function"`);
@@ -184,9 +189,9 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await evaluate(`location.hash = "templates"`);
   await waitFor(`!byId("view-templates").hidden && document.querySelector("[data-clone-id]:not(:disabled)")`);
   const familyCards = await evaluate(`[...document.querySelectorAll("#templates-grid .card h2")].map((node) => node.textContent)`);
-  assert.equal(familyCards.includes("Základná cenovka"), true);
-  assert.equal(familyCards.includes("Wrong 250 EPD"), false);
-  assert.equal(familyCards.includes("Wrong 296 TFT"), false);
+  assert.equal(familyCards.includes("Základná cenovka · 296 × 128 px"), true);
+  assert.equal(familyCards.some((name) => name.startsWith("Wrong 250 EPD")), false);
+  assert.equal(familyCards.some((name) => name.startsWith("Wrong 296 TFT")), false);
   await waitFor(`document.querySelector(".template-preview img") || document.querySelector(".template-preview .template-screen")`);
   const previewState = await evaluate(`(() => {
     const image = document.querySelector(".template-preview img");

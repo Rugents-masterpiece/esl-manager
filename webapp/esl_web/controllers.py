@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from .storage import LEGACY_CONTROLLER_ID
@@ -15,7 +16,8 @@ CONTROLLER_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 class ControllerRegistry:
     """Own one isolated vendor client per configured controller."""
 
-    def __init__(self, controllers: list[dict[str, Any]], default_id: str):
+    def __init__(self, controllers: list[dict[str, Any]], default_id: str, *,
+                 client_factory: Callable[[VendorConfig], Any] = VendorClient):
         if not isinstance(controllers, list) or not controllers:
             raise ValueError("controllers must be a non-empty array")
         if (not isinstance(default_id, str)
@@ -63,7 +65,7 @@ class ControllerRegistry:
 
         self.default_id = default_id
         self._clients = {
-            controller_id: VendorClient(config)
+            controller_id: client_factory(config)
             for controller_id, _name, config in validated
         }
         self._metadata = tuple({
@@ -74,9 +76,10 @@ class ControllerRegistry:
         } for controller_id, name, config in validated)
 
     @classmethod
-    def from_settings(cls, settings: dict[str, Any]) -> ControllerRegistry:
+    def from_settings(cls, settings: dict[str, Any], *,
+                      client_factory: Callable[[VendorConfig], Any] = VendorClient) -> ControllerRegistry:
         if "controllers" in settings:
-            return cls(settings["controllers"], settings["default_controller"])
+            return cls(settings["controllers"], settings["default_controller"], client_factory=client_factory)
         controller = {
             "id": "default",
             "name": "Default controller",
@@ -84,7 +87,7 @@ class ControllerRegistry:
                 "base_url", "username", "password", "connect_timeout", "read_timeout"
             ) if field in settings},
         }
-        return cls([controller], "default")
+        return cls([controller], "default", client_factory=client_factory)
 
     def get(self, controller_id: str | None = None) -> VendorClient:
         """Return the stable isolated client for an ID, or the explicit default."""

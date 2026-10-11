@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 import subprocess
+import shutil
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError
@@ -16,7 +17,20 @@ from esl_web.server import create_server
 
 WEBAPP = Path(__file__).resolve().parents[1]
 STATIC = WEBAPP / "static"
-CHROMIUM = Path("/home/rugent/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome")
+def find_chromium():
+    configured = os.environ.get("ESL_CHROMIUM")
+    if configured:
+        return Path(configured).expanduser()
+    cached = sorted((Path.home() / ".cache/ms-playwright").glob(
+        "chromium-*/chrome-linux*/chrome"
+    ))
+    if cached:
+        return cached[-1]
+    installed = shutil.which("chromium") or shutil.which("chromium-browser")
+    return Path(installed) if installed else Path("/nonexistent/esl-chromium")
+
+
+CHROMIUM = find_chromium()
 
 
 class MarkerParser(HTMLParser):
@@ -46,6 +60,34 @@ class MarkerParser(HTMLParser):
 
 
 class FrontendSourceTests(unittest.TestCase):
+    def test_fixed_tag_display_and_dimension_labels(self):
+        result = subprocess.run(
+            ["node", str(WEBAPP / "tests" / "tag_fixed_display.test.js")],
+            cwd=WEBAPP, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_controller_display_ui_is_read_only_and_rejects_stale_reply(self):
+        result = subprocess.run(
+            ["node", str(WEBAPP / "tests" / "tag_display_ui.test.js")],
+            cwd=WEBAPP, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_tag_content_editor_preserves_typed_data(self):
+        result = subprocess.run(
+            ["node", str(WEBAPP / "tests" / "tag_content_editor.test.js")],
+            cwd=WEBAPP, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_native_previews_reserve_browser_connections_for_login(self):
+        result = subprocess.run(
+            ["node", str(WEBAPP / "tests" / "template_preview_queue.test.js")],
+            cwd=WEBAPP, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_template_families_require_exact_dimensions_and_screen_type(self):
         result = subprocess.run(
             ["node", str(WEBAPP / "tests" / "template_family.test.js")],
@@ -107,13 +149,13 @@ class FrontendSourceTests(unittest.TestCase):
         parser.feed((STATIC / "index.html").read_text(encoding="utf-8"))
         rendered_text = " ".join(parser.text)
 
-        for view in ("Cenovky", "Šablóny", "Controllery", "Audit"):
+        for view in ("Cenovky", "Šablóny", "Editor šablón", "Controllery", "Audit"):
             self.assertIn(view, rendered_text)
         for clutter in ("Produkty", "Úlohy", "Vytvoriť update job", "Posledné úlohy"):
             self.assertNotIn(clutter, rendered_text)
         for marker in (
             "app-status", "safety-banner", "mobile-nav-toggle", "controller-select",
-            "view-tags", "view-templates", "view-controllers", "view-audit", "tag-search",
+            "view-tags", "view-templates", "view-designer", "designer-root", "view-controllers", "view-audit", "tag-search",
             "tags-list", "add-tag", "tag-drawer", "tag-detail-form", "tag-test-data",
             "tag-modal", "tag-form", "clone-modal", "clone-form", "clone-confirm",
             "clone-result", "controllers-grid", "auth-modal", "auth-form", "auth-token",
@@ -122,9 +164,12 @@ class FrontendSourceTests(unittest.TestCase):
         self.assertEqual(parser.scripts, [
             "/static/clone-guard.js", "/static/detail-guard.js",
             "/static/dialog-focus.js", "/static/dialog-operation-guard.js",
-            "/static/template-family.js", "/static/template-preview.js", "/static/app.js",
+            "/static/template-family.js", "/static/template-preview.js",
+            "/static/vendor/JsBarcode.code128.min.js", "/static/vendor/qrcode.js",
+            "/static/vendor/qrcode_UTF8.js", "/static/designer-model.js",
+            "/static/designer-media.js", "/static/designer.js", "/static/app.js",
         ])
-        self.assertEqual(parser.stylesheets, ["/static/styles.css"])
+        self.assertEqual(parser.stylesheets, ["/static/styles.css", "/static/designer.css"])
         self.assertIn('<link rel="icon" href="data:,">', (STATIC / "index.html").read_text(encoding="utf-8"))
         self.assertIn("bez fyzického odoslania", rendered_text.lower())
 
@@ -266,10 +311,18 @@ class StaticServerTests(unittest.TestCase):
 @unittest.skipUnless(CHROMIUM.exists(), "local headless Chromium is unavailable")
 class BrowserDomIntegrationTests(unittest.TestCase):
     def test_create_detail_and_clone_401_flows_preserve_focus_and_block_pending_close(self):
+        self.run_browser("browser_mutation_flows.test.js")
+
+    def test_designer_persistence_drag_history_import_export_and_mobile(self):
+        self.run_browser("designer_browser_flows.test.js")
+
+    def run_browser(self: unittest.TestCase, script_name, vendor_client=None,
+                    controller_registry=None):
         with tempfile.TemporaryDirectory() as temporary:
             server = create_server(
                 "127.0.0.1", 0, database_path=Path(temporary) / "browser.db",
-                seed=True, api_token="A" * 64,
+                seed=True, api_token="A" * 64, vendor_client=vendor_client,
+                controller_registry=controller_registry,
             )
             with server.service.storage.connection() as connection:
                 connection.execute(
@@ -326,7 +379,7 @@ class BrowserDomIntegrationTests(unittest.TestCase):
                     "ESL_BROWSER_CDP": cdp,
                 }
                 result = subprocess.run(
-                    ["node", str(WEBAPP / "tests" / "browser_mutation_flows.test.js")],
+                    ["node", str(WEBAPP / "tests" / script_name)],
                     cwd=WEBAPP, env=environment, capture_output=True, text=True,
                     check=False, timeout=30,
                 )

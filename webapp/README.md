@@ -11,6 +11,10 @@ Samostatná lokálna webová aplikácia pre inventár, obsluhu a bezpečné riad
 - audit udalostí a CSV export produktov,
 - read-only synchronizácia s vendor API,
 - predvolene zapnutý bezpečný simulačný režim.
+- vizuálny editor lokálnych návrhov šablón: text/tvary/čiary, obrázky, Code128 a UTF-8 QR, súradnice, fonty, vrstvy, undo/redo, ukážkové dáta a JSON import/export,
+- read-only výber existujúcich šablón zo zariadenia a načítanie editovateľnej lokálnej kópie s potvrdením konverzných upozornení.
+
+Aktuálna hlavná navigácia poskytuje cenovky, vendor šablóny, editor lokálnych návrhov, controllery a audit. Produkty, joby a alerty sú zatiaľ backendové API, nie samostatné obrazovky. Nový editor nepublikuje návrhy na controller a neodosiela ich na cenovky; podrobný návod, API a hranice podpory sú v [TEMPLATE-DESIGNER.md](TEMPLATE-DESIGNER.md).
 
 ## Štruktúra
 
@@ -39,6 +43,8 @@ Server sa štandardne viaže iba na loopback. Pre prístup z LAN zmeňte host na
     node --check static/app.js    # voliteľné, ak je Node.js dostupný
 
 Testy vendor integrácie používajú iba lokálny fake HTTP server; nekontaktujú fyzické ESL zariadenie.
+
+Browser testy používajú lokálny Chromium z Playwright cache alebo systému. Cestu možno nastaviť cez `ESL_CHROMIUM`; bez browsera sa integračné browser testy preskočia. Ich Node skripty spúšťa Python fixture s vlastným serverom/CDP a disposable databázou, nie samostatný glob `node --test tests/*.test.js`. Editorové modelové testy možno spustiť aj samostatne cez `node tests/designer_model.test.js`.
 
 ## Vendor synchronizácia a bezpečnosť
 
